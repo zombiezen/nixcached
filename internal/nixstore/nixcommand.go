@@ -28,9 +28,14 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// A Client queries and manipulates a local Nix store by invoking the nix CLI.
 type Client struct {
+	// Executable is the path to the nix CLI that the client will use.
+	// If empty, then "nix" is searched on the user's PATH.
 	Executable string
-	Log        io.Writer
+	// Log is used to write the standard error stream from any CLI invocations.
+	// A nil Log will discard logs.
+	Log io.Writer
 }
 
 func (c *Client) exe() string {
@@ -40,6 +45,11 @@ func (c *Client) exe() string {
 	return c.Executable
 }
 
+// Query retrieves information about zero or more store objects.
+// If a store path is known by Nix but is not present in the store,
+// then a [NARInfo] that has StorePath populated will be in the resulting slice
+// but [NARInfo.IsValid] will return false.
+// If zero installables are given, then Query returns (nil, nil).
 func (c *Client) Query(ctx context.Context, installables ...string) ([]*NARInfo, error) {
 	if len(installables) == 0 {
 		return nil, nil
@@ -101,6 +111,7 @@ func (c *Client) Query(ctx context.Context, installables ...string) ([]*NARInfo,
 	return result, nil
 }
 
+// DumpPath will write a NAR file for the given installable to the given writer.
 func (c *Client) DumpPath(ctx context.Context, dst io.Writer, installable string) error {
 	cmd := exec.CommandContext(
 		ctx,
