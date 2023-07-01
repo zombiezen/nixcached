@@ -75,17 +75,17 @@ func (dir Directory) ParseStorePath(storePath string) (_ ObjectName, ok bool) {
 type ObjectName string
 
 const (
-	hashLen          = 32
-	maxObjectNameLen = 211
+	objectNameHashLength = 32
+	maxObjectNameLength  = objectNameHashLength + 1 + 211
 )
 
 // ParseObjectName validates a string as the file name of a Nix store object,
 // returning the error encountered if any.
 func ParseObjectName(name string) (ObjectName, error) {
-	if len(name) < hashLen+len("-")+1 {
+	if len(name) < objectNameHashLength+len("-")+1 {
 		return "", fmt.Errorf("parse nix store object name: %q is too short", name)
 	}
-	if len(name) > maxObjectNameLen {
+	if len(name) > maxObjectNameLength {
 		return "", fmt.Errorf("parse nix store object name: %q is too long", name)
 	}
 	for i := 0; i < len(name); i++ {
@@ -93,12 +93,12 @@ func ParseObjectName(name string) (ObjectName, error) {
 			return "", fmt.Errorf("parse nix store object name: %q contains illegal character %q", name, name[i])
 		}
 	}
-	for i := 0; i < hashLen; i++ {
+	for i := 0; i < objectNameHashLength; i++ {
 		if !isBase32Char(name[i]) {
 			return "", fmt.Errorf("parse nix store object name: %q contains illegal base-32 character %q", name, name[i])
 		}
 	}
-	if name[hashLen] != '-' {
+	if name[objectNameHashLength] != '-' {
 		return "", fmt.Errorf("parse nix store object name: %q does not separate hash with dash", name)
 	}
 	return ObjectName(name), nil
@@ -111,12 +111,12 @@ func (name ObjectName) IsDerivation() bool {
 
 // Hash returns the hash part of the name.
 func (name ObjectName) Hash() string {
-	return string(name[:hashLen])
+	return string(name[:objectNameHashLength])
 }
 
 // Name returns the part of the name after the hash.
 func (name ObjectName) Name() string {
-	return string(name[hashLen+1:])
+	return string(name[objectNameHashLength+1:])
 }
 
 func isNameChar(c byte) bool {

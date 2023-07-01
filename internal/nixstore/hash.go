@@ -142,6 +142,12 @@ func (h Hash) Type() HashType {
 	return h.typ
 }
 
+// Append appends the raw bytes of the hash to dst
+// and returns the resulting slice.
+func (h Hash) Append(dst []byte) []byte {
+	return append(dst, h.hash[:h.typ.Size()]...)
+}
+
 // String returns the result of [Hash.SRI]
 // or "<nil>" if the hash is the zero Hash.
 func (h Hash) String() string {

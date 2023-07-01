@@ -20,9 +20,9 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"hash"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 
 	"github.com/dsnet/compress/bzip2"
@@ -73,6 +73,9 @@ func runUpload(ctx context.Context, g *globalConfig, destinationBucketURL string
 
 	scanner := bufio.NewScanner(input)
 	// TODO(soon): Also watch ctx.Done.
+	storeClient := &nixstore.Client{
+		Log: os.Stderr,
+	}
 	for scanner.Scan() {
 		storePath := scanner.Text()
 		if _, ok := storeDir.ParseStorePath(storePath); !ok {
@@ -80,7 +83,10 @@ func runUpload(ctx context.Context, g *globalConfig, destinationBucketURL string
 			continue
 		}
 		log.Infof(ctx, "Uploading %s", storePath)
-		uploadStorePath(ctx, bucket, storePath)
+		if err := uploadStorePath(ctx, storeClient, bucket, storePath); err != nil {
+			log.Errorf(ctx, "Failed: %v", storePath, err)
+			continue
+		}
 	}
 	if err := scanner.Err(); err != nil {
 		return err
@@ -88,21 +94,103 @@ func runUpload(ctx context.Context, g *globalConfig, destinationBucketURL string
 	return nil
 }
 
-func uploadStorePath(ctx context.Context, destination *blob.Bucket, storePath string) error {
+func uploadStorePath(ctx context.Context, storeClient *nixstore.Client, destination *blob.Bucket, storePath string) error {
 	objectName, err := nixstore.ParseObjectName(filepath.Base(storePath))
 	if err != nil {
 		return fmt.Errorf("upload %s: %v", storePath, err)
 	}
-	narCommand := exec.CommandContext(
-		ctx,
-		"nix", "--extra-experimental-features", "nix-command",
-		"nar", "dump-path",
-		"--", storePath,
-	)
-	// TODO(now)
-	var err error
-	narCommand.Stdout, err = bzip2.NewWriter(io.Discard, &bzip2.WriterConfig{})
+
+	f, err := os.CreateTemp("", "nixcached-"+objectName.Hash()+"-*.nar.bz2")
 	if err != nil {
-		return err
+		return fmt.Errorf("upload %s: %v", storePath, err)
 	}
+	defer func() {
+		fname := f.Name()
+		f.Close()
+		if err := os.Remove(fname); err != nil {
+			log.Errorf(ctx, "Unable to clean up %s: %v", fname, err)
+		}
+	}()
+
+	compressedHashWriter := newHashWriter(nixstore.SHA256, f)
+	compressedMD5Writer := newHashWriter(nixstore.MD5, compressedHashWriter)
+	bzWriter, err := bzip2.NewWriter(compressedMD5Writer, nil)
+	if err != nil {
+		return fmt.Errorf("upload %s: %v", storePath, err)
+	}
+	uncompressedHashWriter := newHashWriter(nixstore.SHA256, bzWriter)
+	if err := storeClient.DumpPath(ctx, uncompressedHashWriter, storePath); err != nil {
+		return fmt.Errorf("upload %s: %v", storePath, err)
+	}
+	if err := bzWriter.Close(); err != nil {
+		return fmt.Errorf("upload %s: %v", storePath, err)
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("upload %s: %v", storePath, err)
+	}
+
+	// Dump succeeded. Query information about this store path before uploading to bucket.
+	queryResult, err := storeClient.Query(ctx, storePath)
+	if err != nil {
+		return fmt.Errorf("upload %s: %v", storePath, err)
+	}
+	info := queryResult[0]
+	if got, want := uncompressedHashWriter.sum(), info.NARHash; got != want {
+		return fmt.Errorf("upload %s: uncompressed nar hash %v did not match store-reported hash %v", storePath, got, want)
+	}
+	if got, want := uncompressedHashWriter.n, info.NARSize; got != want {
+		return fmt.Errorf("upload %s: uncompressed nar size %d did not match store-reported size %d", storePath, got, want)
+	}
+	info.FileHash = compressedHashWriter.sum()
+	info.FileSize = compressedHashWriter.n
+	info.URL = "nar/" + info.FileHash.RawBase32() + ".nar.bz2"
+	info.Compression = nixstore.Bzip2
+	narInfoData, err := info.MarshalText()
+	if err != nil {
+		return fmt.Errorf("upload %s: %v", storePath, err)
+	}
+
+	// Now that we've succeeded locally, make changes to the bucket.
+	// Start with the content so that clients don't observe dangling objects.
+	err = destination.Upload(ctx, info.URL, f, &blob.WriterOptions{
+		ContentType: "application/x-nix-nar",
+		ContentMD5:  compressedMD5Writer.sum().Append(nil),
+	})
+	if err != nil {
+		return fmt.Errorf("upload %s: %v", storePath, err)
+	}
+	err = destination.WriteAll(ctx, objectName.Hash()+".narinfo", narInfoData, &blob.WriterOptions{
+		ContentType: "text/x-nix-narinfo",
+	})
+	if err != nil {
+		return fmt.Errorf("upload %s: %v", storePath, err)
+	}
+
+	return nil
+}
+
+type hashWriter struct {
+	w   io.Writer
+	typ nixstore.HashType
+	h   hash.Hash
+	n   int64
+}
+
+func newHashWriter(typ nixstore.HashType, w io.Writer) *hashWriter {
+	return &hashWriter{
+		w:   w,
+		typ: typ,
+		h:   typ.Hash(),
+	}
+}
+
+func (w *hashWriter) sum() nixstore.Hash {
+	return nixstore.SumHash(w.typ, w.h)
+}
+
+func (w *hashWriter) Write(p []byte) (n int, err error) {
+	n, err = w.w.Write(p)
+	w.h.Write(p[:n])
+	w.n += int64(n)
+	return
 }
