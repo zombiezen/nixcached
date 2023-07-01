@@ -29,7 +29,7 @@ func base32EncodedLen(n int) int {
 
 func base32Encode(dst, src []byte) {
 	dst = dst[:0:len(dst)]
-	for n := len(src) - 1; n >= 0; n-- {
+	for n := base32EncodedLen(len(src)) - 1; n >= 0; n-- {
 		b := uint64(n) * 5
 		i := int(b / 8)
 		j := int(b % 8)

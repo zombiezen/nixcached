@@ -13,8 +13,6 @@ buildGoModule {
 
   vendorHash = "sha256-2fW5S8KqZ1bxWgts8mBeS82wYIfVtfWiYbrUrzZXOTM=";
 
-  doCheck = false;
-
   meta = {
     description = "Nix cache daemon";
     homepage = "https://github.com/zombiezen/nixcached";
