@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"os"
 	"os/signal"
 	"sync"
@@ -52,8 +53,8 @@ func main() {
 	}
 
 	rootCommand.AddCommand(
+		newSendCommand(g),
 		newUploadCommand(g),
-		// ...
 	)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), sigterm.Signals()...)
@@ -90,6 +91,62 @@ func newBucketURLOpener(ctx context.Context) (*blob.URLMux, error) {
 	})
 
 	return mux, nil
+}
+
+func openFileCtx(ctx context.Context, name string, flag int, perm os.FileMode) (*os.File, error) {
+	type result struct {
+		f   *os.File
+		err error
+	}
+
+	done := ctx.Done()
+	c := make(chan result)
+	log.Debugf(ctx, "Opening file %s...", name)
+	go func() {
+		var r result
+		r.f, r.err = os.OpenFile(name, flag, perm)
+		select {
+		case c <- r:
+		case <-done:
+			if r.f != nil {
+				r.f.Close()
+			}
+		}
+	}()
+
+	select {
+	case r := <-c:
+		log.Debugf(ctx, "File %s opened", name)
+		return r.f, r.err
+	case <-done:
+		log.Debugf(ctx, "File %s abandoned before open", name)
+		return nil, ctx.Err()
+	}
+}
+
+func writeCtx(ctx context.Context, w io.Writer, p []byte) (int, error) {
+	type result struct {
+		n   int
+		err error
+	}
+
+	done := ctx.Done()
+	c := make(chan result)
+	go func() {
+		var r result
+		r.n, r.err = w.Write(p)
+		select {
+		case c <- r:
+		case <-done:
+		}
+	}()
+
+	select {
+	case r := <-c:
+		return r.n, r.err
+	case <-done:
+		return 0, ctx.Err()
+	}
 }
 
 var initLogOnce sync.Once

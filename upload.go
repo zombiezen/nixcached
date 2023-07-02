@@ -34,21 +34,30 @@ import (
 
 func newUploadCommand(g *globalConfig) *cobra.Command {
 	c := &cobra.Command{
-		Use:           "upload BUCKET_URL",
-		Short:         "Upload paths from a file",
-		Args:          cobra.ExactArgs(1),
-		SilenceErrors: true,
-		SilenceUsage:  true,
+		Use:                   "upload [flags] BUCKET_URL",
+		Short:                 "Upload paths from a file or pipe",
+		Args:                  cobra.ExactArgs(1),
+		SilenceErrors:         true,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
 	}
-	inputPath := c.Flags().String("input", "", "file with store paths")
+	inputPath := c.Flags().String("input", "", "`path` to file with store paths (defaults to stdin)")
+	keepAlive := c.Flags().BoolP("keep-alive", "k", false, "if input is a pipe, then keep running even when there are no senders")
 	c.RunE = func(cmd *cobra.Command, args []string) error {
+		ctx := cmd.Context()
 		storeDir, err := nixstore.DirectoryFromEnv()
 		if err != nil {
 			return err
 		}
 		input := os.Stdin
 		if *inputPath != "" {
-			f, err := os.Open(*inputPath)
+			openFlag := os.O_RDONLY
+			if *keepAlive {
+				if inputInfo, err := os.Stat(*inputPath); err == nil && inputInfo.Mode().Type() == os.ModeNamedPipe {
+					openFlag = os.O_RDWR
+				}
+			}
+			f, err := openFileCtx(ctx, *inputPath, openFlag, 0)
 			if err != nil {
 				return err
 			}
@@ -72,19 +81,40 @@ func runUpload(ctx context.Context, g *globalConfig, destinationBucketURL string
 	defer bucket.Close()
 
 	scanner := bufio.NewScanner(input)
-	// TODO(soon): Also watch ctx.Done.
 	storeClient := &nixstore.Client{
 		Log: os.Stderr,
 	}
-	for scanner.Scan() {
+	c := make(chan bool)
+scanLoop:
+	for {
+		go func() {
+			select {
+			case c <- scanner.Scan():
+			case <-ctx.Done():
+			}
+		}()
+
+		select {
+		case scanned := <-c:
+			if !scanned {
+				break scanLoop
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 		storePath := scanner.Text()
-		if _, ok := storeDir.ParseStorePath(storePath); !ok {
+		name, ok := storeDir.ParseStorePath(storePath)
+		if !ok {
 			log.Warnf(ctx, "Received invalid store path %q, skipping.", storePath)
+			continue
+		}
+		if name.IsDerivation() {
+			log.Warnf(ctx, "Received store derivation path %q, skipping.", storePath)
 			continue
 		}
 		log.Infof(ctx, "Uploading %s", storePath)
 		if err := uploadStorePath(ctx, storeClient, bucket, storePath); err != nil {
-			log.Errorf(ctx, "Failed: %v", storePath, err)
+			log.Errorf(ctx, "Failed: %v", err)
 			continue
 		}
 	}

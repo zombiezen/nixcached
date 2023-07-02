@@ -8,7 +8,7 @@ require (
 	gocloud.dev v0.30.0
 	golang.org/x/sys v0.9.0
 	zombiezen.com/go/bass v0.0.0-20230225022050-74028357c0a4
-	zombiezen.com/go/log v1.0.3
+	zombiezen.com/go/log v1.1.0
 )
 
 require (
