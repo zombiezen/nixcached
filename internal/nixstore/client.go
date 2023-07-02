@@ -51,14 +51,33 @@ func (c *Client) exe() string {
 // but [NARInfo.IsValid] will return false.
 // If zero installables are given, then Query returns (nil, nil).
 func (c *Client) Query(ctx context.Context, installables ...string) ([]*NARInfo, error) {
+	return c.query(ctx, false, installables)
+}
+
+// QueryRecursive retrieves information about
+// the transitive closure of zero or more store objects
+// as defined by their references.
+// If a store path is known by Nix but is not present in the store,
+// then a [NARInfo] that has StorePath populated will be in the resulting slice
+// but [NARInfo.IsValid] will return false.
+// If zero installables are given, then QueryRecursive returns (nil, nil).
+func (c *Client) QueryRecursive(ctx context.Context, installables ...string) ([]*NARInfo, error) {
+	return c.query(ctx, true, installables)
+}
+
+func (c *Client) query(ctx context.Context, recursive bool, installables []string) ([]*NARInfo, error) {
 	if len(installables) == 0 {
 		return nil, nil
 	}
 
 	args := []string{
 		"--extra-experimental-features", "nix-command",
-		"path-info", "--json", "--",
+		"path-info", "--json",
 	}
+	if recursive {
+		args = append(args, "--recursive")
+	}
+	args = append(args, "--")
 	args = append(args, installables...)
 	cmd := exec.CommandContext(ctx, c.exe(), args...)
 	cmd.Cancel = func() error {
