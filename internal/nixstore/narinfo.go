@@ -53,6 +53,15 @@ type NARInfo struct {
 	Sig []string
 }
 
+// Clone returns a deep copy of an info struct.
+func (info *NARInfo) Clone() *NARInfo {
+	info2 := new(NARInfo)
+	*info2 = *info
+	info.References = append([]ObjectName(nil), info.References...)
+	info.Sig = append([]string(nil), info.Sig...)
+	return info
+}
+
 // Directory returns the store directory of the store object.
 func (info *NARInfo) Directory() Directory {
 	return Directory(slashpath.Dir(info.StorePath))
