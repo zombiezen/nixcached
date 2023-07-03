@@ -17,10 +17,14 @@
 package nixstore
 
 import (
+	"bytes"
 	"fmt"
 	slashpath "path"
 	"strconv"
 )
+
+// NARInfoMIMEType is the MIME content type for a .narinfo file.
+const NARInfoMIMEType = "text/x-nix-narinfo"
 
 // NARInfo is the parsed representation of a .narinfo file.
 type NARInfo struct {
@@ -72,6 +76,19 @@ func (info *NARInfo) IsValid() bool {
 	return info.validate() == nil
 }
 
+// AddSignatures adds signatures that are not already present in info.
+func (info *NARInfo) AddSignatures(sigs ...string) {
+addLoop:
+	for _, newSig := range sigs {
+		for _, oldSig := range info.Sig {
+			if oldSig == newSig {
+				continue addLoop
+			}
+		}
+		info.Sig = append(info.Sig, newSig)
+	}
+}
+
 func (info *NARInfo) validate() error {
 	if _, err := ParseObjectName(slashpath.Base(info.StorePath)); err != nil {
 		return fmt.Errorf("store path: %v", err)
@@ -94,6 +111,135 @@ func (info *NARInfo) validate() error {
 	if info.NARSize < 0 {
 		return fmt.Errorf("negative nar size")
 	}
+	return nil
+}
+
+// UnmarshalText decodes a .narinfo file.
+func (info *NARInfo) UnmarshalText(src []byte) (err error) {
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("unmarshal narinfo: %v", err)
+		}
+	}()
+
+	newline := []byte("\n")
+	*info = NARInfo{}
+	for lineno := 1; len(src) > 0; lineno++ {
+		i := bytes.IndexByte(src, ':')
+		if i < 0 {
+			return fmt.Errorf("line %d: could not find ':'", lineno)
+		}
+		key := string(src[:i])
+		lineno += bytes.Count(src[:i+len(": ")], newline)
+		src = src[i+len(": "):]
+
+		i = bytes.IndexByte(src, '\n')
+		if i < 0 {
+			return fmt.Errorf("line %d: missing newline", lineno)
+		}
+		value := src[:i]
+		src = src[i+1:]
+
+		switch key {
+		case "StorePath":
+			if info.StorePath != "" {
+				return fmt.Errorf("line %d: duplicate StorePath", lineno)
+			}
+			info.StorePath = string(value)
+			if info.StorePath == "" {
+				return fmt.Errorf("line %d: empty StorePath", lineno)
+			}
+			if !slashpath.IsAbs(info.StorePath) {
+				return fmt.Errorf("line %d: store path %q not absolute", lineno, info.StorePath)
+			}
+		case "URL":
+			if info.URL != "" {
+				return fmt.Errorf("line %d: duplicate URL", lineno)
+			}
+			info.URL = string(value)
+		case "Compression":
+			if info.Compression != "" {
+				return fmt.Errorf("line %d: duplicate Compression", lineno)
+			}
+			info.Compression = CompressionType(value)
+			if info.Compression == "" {
+				return fmt.Errorf("line %d: empty Compression", lineno)
+			}
+			if !info.Compression.IsKnown() {
+				return fmt.Errorf("line %d: unknown compression %q", lineno, info.Compression)
+			}
+		case "FileHash":
+			if info.FileHash.Type() != 0 {
+				return fmt.Errorf("line %d: duplicate FileHash", lineno)
+			}
+			var err error
+			info.FileHash, err = ParseHash(string(value))
+			if err != nil {
+				return fmt.Errorf("line %d: FileHash: %v", lineno, err)
+			}
+		case "FileSize":
+			if info.FileSize > 0 {
+				return fmt.Errorf("line %d: duplicate FileSize", lineno)
+			}
+			var err error
+			info.FileSize, err = strconv.ParseInt(string(value), 10, 64)
+			if err != nil {
+				return fmt.Errorf("line %d: FileSize: %v", lineno, err)
+			}
+			if info.FileSize <= 0 {
+				return fmt.Errorf("line %d: FileSize is non-positive", lineno)
+			}
+		case "NarHash":
+			if info.NARHash.Type() != 0 {
+				return fmt.Errorf("line %d: duplicate NarHash", lineno)
+			}
+			var err error
+			info.NARHash, err = ParseHash(string(value))
+			if err != nil {
+				return fmt.Errorf("line %d: NarHash: %v", lineno, err)
+			}
+		case "NarSize":
+			if info.NARSize > 0 {
+				return fmt.Errorf("line %d: duplicate NarSize", lineno)
+			}
+			var err error
+			info.NARSize, err = strconv.ParseInt(string(value), 10, 64)
+			if err != nil {
+				return fmt.Errorf("line %d: NarSize: %v", lineno, err)
+			}
+			if info.NARSize <= 0 {
+				return fmt.Errorf("line %d: NarSize is non-positive", lineno)
+			}
+		case "References":
+			if len(info.References) > 0 {
+				return fmt.Errorf("line %d: duplicate References", lineno)
+			}
+			words := bytes.Fields(value)
+			if len(words) == 0 {
+				return fmt.Errorf("line %d: empty References", lineno)
+			}
+			info.References = make([]ObjectName, 0, len(words))
+			for _, w := range words {
+				name, err := ParseObjectName(string(w))
+				if err != nil {
+					return fmt.Errorf("line %d: References: %v", lineno, err)
+				}
+				info.References = append(info.References, name)
+			}
+		case "Deriver":
+			if info.Deriver != "" {
+				return fmt.Errorf("line %d: duplicate Deriver", lineno)
+			}
+			var err error
+			info.Deriver, err = ParseObjectName(string(value))
+			if err != nil {
+				return fmt.Errorf("line %d: Deriver: %v", lineno, err)
+			}
+		case "Sig":
+			info.Sig = append(info.Sig, string(value))
+		}
+	}
+
 	return nil
 }
 
