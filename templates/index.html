@@ -1,0 +1,19 @@
+{{ define "title" -}}
+	Index
+{{- end }}
+
+{{ define "body" -}}
+	<h1>Listing</h1>
+  {{- with .StoreObjectHashes }}
+    <table>
+      <thead>
+        <th scope="col">Hash</th>
+      </thead>
+      <tbody>
+        {{- range . }}
+          <tr><td><a href="{{ . }}">{{ . }}</a></td></tr>
+        {{- end }}
+      </tbody>
+    </table>
+  {{- end }}
+{{- end }}

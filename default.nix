@@ -11,7 +11,7 @@ buildGoModule {
     path = ./.;
   };
 
-  vendorHash = "sha256-QzljuvSk2w+m33Zne0tE1qkE/q9SwksVPgyXuggnbyg=";
+  vendorHash = "sha256-Jn2d+yCvzRnCBIdjr2YifJd6JdzrdkBCJhC+/NOR8uI=";
 
   meta = {
     description = "Nix cache daemon";

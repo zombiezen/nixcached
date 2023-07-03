@@ -29,7 +29,7 @@ import (
 	"gocloud.dev/blob/gcsblob"
 	"gocloud.dev/blob/s3blob"
 	"gocloud.dev/gcp"
-	"zombiezen.com/go/bass/sigterm"
+	"golang.org/x/sys/unix"
 	"zombiezen.com/go/log"
 )
 
@@ -54,10 +54,11 @@ func main() {
 
 	rootCommand.AddCommand(
 		newSendCommand(g),
+		newServeCommand(g),
 		newUploadCommand(g),
 	)
 
-	ctx, cancel := signal.NotifyContext(context.Background(), sigterm.Signals()...)
+	ctx, cancel := signal.NotifyContext(context.Background(), unix.SIGTERM, unix.SIGINT)
 	err := rootCommand.ExecuteContext(ctx)
 	cancel()
 	if err != nil {
