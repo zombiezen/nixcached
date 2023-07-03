@@ -24,6 +24,10 @@ import (
 	"strings"
 )
 
+// CacheInfoName is the name of the binary cache resource
+// that describes the binary cache itself.
+const CacheInfoName = "nix-cache-info"
+
 // Directory is the location of a Nix store in the local filesystem.
 type Directory string
 
@@ -111,12 +115,18 @@ func (name ObjectName) IsDerivation() bool {
 
 // Hash returns the hash part of the name.
 func (name ObjectName) Hash() string {
+	if len(name) < objectNameHashLength {
+		return ""
+	}
 	return string(name[:objectNameHashLength])
 }
 
 // Name returns the part of the name after the hash.
 func (name ObjectName) Name() string {
-	return string(name[objectNameHashLength+1:])
+	if len(name) <= objectNameHashLength+len("-") {
+		return ""
+	}
+	return string(name[objectNameHashLength+len("-"):])
 }
 
 func isNameChar(c byte) bool {

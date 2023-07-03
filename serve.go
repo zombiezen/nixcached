@@ -19,11 +19,11 @@ package main
 import (
 	"context"
 	"embed"
-	"io"
 	"io/fs"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -35,6 +35,10 @@ import (
 	"zombiezen.com/go/bass/action"
 	"zombiezen.com/go/bass/runhttp"
 	"zombiezen.com/go/log"
+	"zombiezen.com/go/nixcached/internal/nixstore"
+	"zombiezen.com/go/sqlite"
+	"zombiezen.com/go/sqlite/sqlitemigration"
+	"zombiezen.com/go/sqlite/sqlitex"
 )
 
 func newServeCommand(g *globalConfig) *cobra.Command {
@@ -49,18 +53,43 @@ func newServeCommand(g *globalConfig) *cobra.Command {
 	host := c.Flags().String("host", "localhost", "`interface` to listen on")
 	port := c.Flags().Uint16P("port", "p", 8080, "`port` to listen on")
 	resources := c.Flags().String("resources", "", "`path` to resource files (defaults to using embedded files)")
+	crawlFrequency := c.Flags().Duration("crawl-frequency", 30*time.Second, "minimum `duration` of time between starting crawls")
 	c.RunE = func(cmd *cobra.Command, args []string) error {
 		listenAddr := net.JoinHostPort(*host, strconv.Itoa(int(*port)))
 		resourcesFS := fs.FS(embeddedResources)
 		if *resources != "" {
 			resourcesFS = os.DirFS(*resources)
 		}
-		return runServe(cmd.Context(), g, listenAddr, resourcesFS, args[0])
+		return runServe(cmd.Context(), g, listenAddr, resourcesFS, args[0], *crawlFrequency)
 	}
 	return c
 }
 
-func runServe(ctx context.Context, g *globalConfig, listenAddr string, resources fs.FS, src string) error {
+func runServe(ctx context.Context, g *globalConfig, listenAddr string, resources fs.FS, src string, crawlFrequency time.Duration) error {
+	tempDir, err := os.MkdirTemp("", "nixcached-serve-*")
+	if err != nil {
+		return err
+	}
+	log.Debugf(ctx, "Created %s", tempDir)
+	defer func() {
+		if err := os.RemoveAll(tempDir); err != nil {
+			log.Warnf(ctx, "Clean up: %v", err)
+		}
+	}()
+	cachePool := sqlitemigration.NewPool(filepath.Join(tempDir, "cache.db"), uiCacheSchema, sqlitemigration.Options{
+		OnStartMigrate: func() {
+			log.Debugf(ctx, "Cache database migration starting...")
+		},
+		OnReady: func() {
+			log.Debugf(ctx, "Cache database ready")
+		},
+		OnError: func(err error) {
+			log.Errorf(ctx, "Cache setup: %v", err)
+		},
+		PrepareConn: prepareUICacheConn,
+	})
+	defer cachePool.Close()
+
 	opener, err := newBucketURLOpener(ctx)
 	if err != nil {
 		return err
@@ -71,10 +100,39 @@ func runServe(ctx context.Context, g *globalConfig, listenAddr string, resources
 	}
 	defer bucket.Close()
 
+	crawlCtx, cancelCrawl := context.WithCancel(ctx)
+	crawlDone := make(chan struct{})
+	go func() {
+		defer close(crawlDone)
+		ticker := time.NewTicker(crawlFrequency)
+		defer ticker.Stop()
+		for {
+			conn, err := cachePool.Get(crawlCtx)
+			if err != nil {
+				return
+			}
+			crawl(crawlCtx, conn, bucket)
+			cachePool.Put(conn)
+
+			select {
+			case <-ticker.C:
+			case <-crawlCtx.Done():
+				return
+			}
+		}
+	}()
+	defer func() {
+		log.Debugf(ctx, "Shutting down crawl...")
+		cancelCrawl()
+		<-crawlDone
+		log.Debugf(ctx, "Crawl shutdown complete")
+	}()
+
 	srv := &http.Server{
 		Addr: listenAddr,
 		Handler: &bucketServer{
 			bucket:    bucket,
+			cache:     cachePool,
 			resources: resources,
 		},
 		ReadHeaderTimeout: 30 * time.Second,
@@ -100,11 +158,13 @@ func runServe(ctx context.Context, g *globalConfig, listenAddr string, resources
 	})
 }
 
-// go:embed templates
+//go:embed static
+//go:embed templates
 var embeddedResources embed.FS
 
 type bucketServer struct {
 	bucket    *blob.Bucket
+	cache     *sqlitemigration.Pool
 	resources fs.FS
 }
 
@@ -133,6 +193,18 @@ func (srv *bucketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	const staticPrefix = "/_/"
+	if strings.HasPrefix(r.URL.Path, staticPrefix) {
+		static, err := fs.Sub(srv.resources, "static")
+		if err != nil {
+			log.Errorf(ctx, "Can't get static: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		http.StripPrefix(staticPrefix, http.FileServer(http.FS(static))).ServeHTTP(w, r)
+		return
+	}
+
 	// Fallback: bucket content.
 	handlers.MethodHandler{
 		http.MethodGet:  http.HandlerFunc(srv.serveContent),
@@ -140,23 +212,53 @@ func (srv *bucketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}.ServeHTTP(w, r)
 }
 
-func (srv *bucketServer) serveIndex(ctx context.Context, r *http.Request) (*action.Response, error) {
-	iterator := srv.bucket.List(&blob.ListOptions{
-		Delimiter: "/",
-	})
-	var data struct {
-		StoreObjectHashes []string
+func (srv *bucketServer) serveIndex(ctx context.Context, r *http.Request) (_ *action.Response, err error) {
+	conn, err := srv.cache.Get(ctx)
+	if err != nil {
+		return nil, err
 	}
-	for {
-		obj, err := iterator.Next(ctx)
+	defer srv.cache.Put(conn)
+	defer sqlitex.Transaction(conn)(&err)
+
+	var data struct {
+		InitialCrawlComplete bool
+		Infos                []*nixstore.NARInfo
+	}
+	err = sqlitex.Execute(conn, `select "initial_crawl_complete" from "uicache_status";`, &sqlitex.ExecOptions{
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			data.InitialCrawlComplete = stmt.ColumnBool(0)
+			return nil
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if data.InitialCrawlComplete {
+		var buf []byte
+		err = sqlitex.Execute(
+			conn,
+			`select "hash" as "hash", "narinfo" as "narinfo" from "nar_infos" order by store_path_name("store_path") nulls last;`,
+			&sqlitex.ExecOptions{
+				ResultFunc: func(stmt *sqlite.Stmt) error {
+					if n := stmt.GetLen("narinfo"); n > cap(buf) {
+						buf = make([]byte, n)
+					} else {
+						buf = buf[:n]
+					}
+					stmt.GetBytes("narinfo", buf)
+					info := new(nixstore.NARInfo)
+					if err := info.UnmarshalText(buf); err != nil {
+						log.Warnf(ctx, "Unable to parse %s.narinfo: %v", stmt.GetText("hash"), buf)
+						return nil
+					}
+					data.Infos = append(data.Infos, info)
+					return nil
+				},
+			},
+		)
 		if err != nil {
-			if err != io.EOF {
-				log.Errorf(ctx, "Listing bucket: %v", err)
-			}
-			break
-		}
-		if !obj.IsDir && strings.HasSuffix(obj.Key, ".narinfo") {
-			data.StoreObjectHashes = append(data.StoreObjectHashes, obj.Key)
+			return nil, err
 		}
 	}
 

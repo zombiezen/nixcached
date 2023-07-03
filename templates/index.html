@@ -3,17 +3,30 @@
 {{- end }}
 
 {{ define "body" -}}
-	<h1>Listing</h1>
-  {{- with .StoreObjectHashes }}
-    <table>
-      <thead>
-        <th scope="col">Hash</th>
-      </thead>
-      <tbody>
-        {{- range . }}
-          <tr><td><a href="{{ . }}">{{ . }}</a></td></tr>
-        {{- end }}
-      </tbody>
-    </table>
+  {{- if not .InitialCrawlComplete }}
+    <h1>Hang tight</h1>
+    <p>Loading contents, please wait&hellip;</p>
+  {{- else }}
+    <h1>Listing</h1>
+    {{- with .Infos }}
+      <table>
+        <thead>
+          <th scope="col" class="Listing-heading">Name</th>
+          <th scope="col" class="Listing-heading">Hash</th>
+        </thead>
+        <tbody>
+          {{- range . }}
+            <tr>
+              <th scope="row" class="Listing-objectName">
+                {{- .ObjectName.Name -}}
+              </th>
+              <td class="Listing-objectHash">
+                <a href="{{ .ObjectName.Hash }}.narinfo">{{ .ObjectName.Hash }}</a>
+              </td>
+            </tr>
+          {{- end }}
+        </tbody>
+      </table>
+    {{- end }}
   {{- end }}
 {{- end }}

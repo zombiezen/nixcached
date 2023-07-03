@@ -1,0 +1,32 @@
+html, body {
+  font-family: Helvetica, Arial, sans-serif;
+  margin: 0;
+  padding: 0;
+}
+.Main {
+  margin: 0 1rem;
+}
+.Listing-heading {
+  font-weight: bold;
+  padding: 0 0 0.25rem;
+  text-align: left;
+}
+.Listing-objectName {
+  font-weight: normal;
+  padding: 0.25rem 1rem 0.25rem 0;
+  text-align: left;
+}
+.Listing-objectHash {
+  font-family: 'Courier New', Courier, monospace;
+  font-weight: normal;
+  padding: 0.25rem 0.1rem;
+  text-align: left;
+}
+.Footer {
+  margin: 3rem 0 1rem;
+}
+.Footer-copy {
+  color: rgba(0, 0, 0, 0.8);
+  font-size: 0.9rem;
+  text-align: center;
+}

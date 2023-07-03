@@ -71,6 +71,12 @@ func (info *NARInfo) Directory() Directory {
 	return Directory(slashpath.Dir(info.StorePath))
 }
 
+// ObjectName returns the base name of the store path.
+func (info *NARInfo) ObjectName() ObjectName {
+	name, _ := ParseObjectName(slashpath.Base(info.StorePath))
+	return name
+}
+
 // IsValid reports whether the NAR information fields are valid.
 func (info *NARInfo) IsValid() bool {
 	return info.validate() == nil
