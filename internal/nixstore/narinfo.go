@@ -130,6 +130,7 @@ func (info *NARInfo) UnmarshalText(src []byte) (err error) {
 
 	newline := []byte("\n")
 	*info = NARInfo{}
+	hasReferences := false
 	for lineno := 1; len(src) > 0; lineno++ {
 		i := bytes.IndexByte(src, ':')
 		if i < 0 {
@@ -217,13 +218,11 @@ func (info *NARInfo) UnmarshalText(src []byte) (err error) {
 				return fmt.Errorf("line %d: NarSize is non-positive", lineno)
 			}
 		case "References":
-			if len(info.References) > 0 {
+			if hasReferences {
 				return fmt.Errorf("line %d: duplicate References", lineno)
 			}
+			hasReferences = true
 			words := bytes.Fields(value)
-			if len(words) == 0 {
-				return fmt.Errorf("line %d: empty References", lineno)
-			}
 			info.References = make([]ObjectName, 0, len(words))
 			for _, w := range words {
 				name, err := ParseObjectName(string(w))
