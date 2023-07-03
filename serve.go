@@ -274,14 +274,15 @@ func (srv *bucketServer) serveContent(w http.ResponseWriter, r *http.Request) {
 	// TODO(someday): Range requests.
 
 	ctx := r.Context()
-	attr, err := srv.bucket.Attributes(ctx, r.URL.Path)
+	key := strings.TrimPrefix(r.URL.Path, "/")
+	attr, err := srv.bucket.Attributes(ctx, key)
 	if gcerrors.Code(err) == gcerrors.NotFound {
-		http.NotFound(w, r)
+		http.Error(w, "Object "+key+" not found in bucket", http.StatusNotFound)
 		return
 	}
 	if err != nil {
-		log.Errorf(ctx, "Unable to query attributes for %s: %v", r.URL.Path, err)
-		http.Error(w, "unable to query attributes for "+r.URL.Path, http.StatusBadGateway)
+		log.Errorf(ctx, "Unable to query attributes for %s: %v", key, err)
+		http.Error(w, "unable to query attributes for "+key, http.StatusBadGateway)
 		return
 	}
 	w.Header().Set("Content-Length", strconv.FormatInt(attr.Size, 10))
@@ -302,14 +303,14 @@ func (srv *bucketServer) serveContent(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodHead {
 		return
 	}
-	err = srv.bucket.Download(ctx, r.URL.Path, w, nil)
+	err = srv.bucket.Download(ctx, key, w, nil)
 	if gcerrors.Code(err) == gcerrors.NotFound {
 		http.NotFound(w, r)
 		return
 	}
 	if err != nil {
-		log.Errorf(ctx, "Unable to read %s: %v", r.URL.Path, err)
-		http.Error(w, "unable to read "+r.URL.Path, http.StatusBadGateway)
+		log.Errorf(ctx, "Unable to read %s: %v", key, err)
+		http.Error(w, "unable to read "+key, http.StatusBadGateway)
 		return
 	}
 }
