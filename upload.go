@@ -304,8 +304,9 @@ func uploadStorePath(ctx context.Context, storeClient *nixstore.Client, destinat
 	// Now that we've succeeded locally, make changes to the bucket.
 	// Start with the content so that clients don't observe dangling objects.
 	err = destination.Upload(ctx, info.URL, f, &blob.WriterOptions{
-		ContentType: "application/x-nix-nar",
-		ContentMD5:  compressedMD5Writer.sum().Append(nil),
+		ContentType:     "application/x-nix-nar",
+		ContentEncoding: "bzip2",
+		ContentMD5:      compressedMD5Writer.sum().Append(nil),
 	})
 	if err != nil {
 		return fmt.Errorf("upload %s: %v", info.StorePath, err)
