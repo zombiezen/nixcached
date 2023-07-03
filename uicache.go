@@ -17,7 +17,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/md5"
 	_ "embed"
 	"io"
 	slashpath "path"
@@ -43,6 +45,17 @@ func prepareUICacheConn(conn *sqlite.Conn) error {
 	if err := refunc.Register(conn); err != nil {
 		return err
 	}
+	conn.CreateFunction("md5", &sqlite.FunctionImpl{
+		NArgs:         1,
+		Deterministic: true,
+		Scalar: func(ctx sqlite.Context, args []sqlite.Value) (sqlite.Value, error) {
+			if args[0].Type() == sqlite.TypeNull {
+				return sqlite.Value{}, nil
+			}
+			sum := md5.Sum(args[0].Blob())
+			return sqlite.BlobValue(sum[:]), nil
+		},
+	})
 	conn.CreateFunction("store_path_name", &sqlite.FunctionImpl{
 		NArgs:         1,
 		Deterministic: true,
@@ -132,6 +145,32 @@ func crawl(ctx context.Context, conn *sqlite.Conn, bucket *blob.Bucket) {
 			log.Errorf(ctx, "Inserting %s into cache: %v", obj.Key, err)
 			continue
 		}
+		var cachedSize int64 = -1
+		var cachedMD5 []byte
+		err = sqlitex.Execute(
+			conn,
+			`select coalesce(length("narinfo"), -1) as "narinfo_length", `+
+				`md5("narinfo") as "narinfo_md5" `+
+				`from "nar_infos" where "hash" = :hash;`,
+			&sqlitex.ExecOptions{
+				Named: map[string]any{
+					":hash": hash,
+				},
+				ResultFunc: func(stmt *sqlite.Stmt) error {
+					cachedSize = stmt.GetInt64("narinfo_length")
+					cachedMD5 = make([]byte, stmt.GetLen("narinfo_md5"))
+					stmt.GetBytes("narinfo_md5", cachedMD5)
+					return nil
+				},
+			},
+		)
+		if err != nil {
+			log.Errorf(ctx, "Unable to check cache for %s: %v", obj.Key, err)
+		} else if cachedSize == obj.Size && (len(obj.MD5) == 0 || bytes.Equal(obj.MD5, cachedMD5)) {
+			log.Debugf(ctx, "Crawl cache for %s up-to-date", obj.Key)
+			continue
+		}
+
 		data, err := bucket.ReadAll(ctx, obj.Key)
 		if err != nil {
 			log.Errorf(ctx, "Reading %s: %v", obj.Key, err)
