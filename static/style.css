@@ -6,21 +6,35 @@ html, body {
 .Main {
   margin: 0 1rem;
 }
+.Listing {
+  --row-padding: 0.25rem;
+}
 .Listing-heading {
   font-weight: bold;
-  padding: 0 0 0.25rem;
+  padding: 0 0 var(--row-padding, 0);
   text-align: left;
+}
+.Listing-heading.Listing-heading--size {
+  text-align: center;
 }
 .Listing-objectName {
   font-weight: normal;
-  padding: 0.25rem 1rem 0.25rem 0;
+  padding: var(--row-padding, 0) 1rem var(--row-padding, 0) 0;
   text-align: left;
 }
 .Listing-objectHash {
   font-family: 'Courier New', Courier, monospace;
   font-weight: normal;
-  padding: 0.25rem 0.1rem;
+  padding: var(--row-padding, 0) 0.1rem;
   text-align: left;
+}
+.Listing-objectSize {
+  font-weight: normal;
+  padding: var(--row-padding, 0) 0.5rem;
+  text-align: right;
+}
+.Listing-objectSize.Listing-objectSize--eq {
+  font-style: italic;
 }
 .Footer {
   margin: 3rem 0 1rem;
@@ -29,4 +43,7 @@ html, body {
   color: rgba(0, 0, 0, 0.8);
   font-size: 0.9rem;
   text-align: center;
+}
+.Footer-link {
+  color: rgba(0, 0, 0, 0.8);
 }

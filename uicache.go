@@ -21,6 +21,7 @@ import (
 	"context"
 	"crypto/md5"
 	_ "embed"
+	"fmt"
 	"io"
 	slashpath "path"
 	"strings"
@@ -42,6 +43,9 @@ var uiCacheSchema = sqlitemigration.Schema{
 }
 
 func prepareUICacheConn(conn *sqlite.Conn) error {
+	if err := sqlitex.ExecuteTransient(conn, "PRAGMA foreign_keys = on;", nil); err != nil {
+		return err
+	}
 	if err := refunc.Register(conn); err != nil {
 		return err
 	}
@@ -54,6 +58,20 @@ func prepareUICacheConn(conn *sqlite.Conn) error {
 			}
 			sum := md5.Sum(args[0].Blob())
 			return sqlite.BlobValue(sum[:]), nil
+		},
+	})
+	conn.CreateFunction("store_path_hash", &sqlite.FunctionImpl{
+		NArgs:         1,
+		Deterministic: true,
+		Scalar: func(ctx sqlite.Context, args []sqlite.Value) (sqlite.Value, error) {
+			if args[0].Type() == sqlite.TypeNull {
+				return sqlite.Value{}, nil
+			}
+			name, err := nixstore.ParseObjectName(slashpath.Base(args[0].Text()))
+			if err != nil {
+				return sqlite.Value{}, nil
+			}
+			return sqlite.TextValue(name.Hash()), nil
 		},
 	})
 	conn.CreateFunction("store_path_name", &sqlite.FunctionImpl{
@@ -127,12 +145,12 @@ func crawl(ctx context.Context, conn *sqlite.Conn, bucket *blob.Bucket) {
 			}
 			break
 		}
-		hash, hasExt := strings.CutSuffix(obj.Key, ".narinfo")
+		hash, hasExt := strings.CutSuffix(obj.Key, narInfoExtension)
 		if obj.IsDir || !hasExt {
 			log.Debugf(ctx, "Ignoring %q during crawl", obj.Key)
 			continue
 		}
-		if objectName, err := nixstore.ParseObjectName(hash + "-x"); err != nil || objectName.Hash() != hash {
+		if objectName, err := nixstore.ParseObjectName(hash + "-x"); err != nil || objectName.Hash() != hash || objectName.Name() != "x" {
 			log.Warnf(ctx, "Ignoring improperly named %q", obj.Key)
 			continue
 		}
@@ -176,25 +194,56 @@ func crawl(ctx context.Context, conn *sqlite.Conn, bucket *blob.Bucket) {
 			log.Errorf(ctx, "Reading %s: %v", obj.Key, err)
 			continue
 		}
-		info := new(nixstore.NARInfo)
-		if err := info.UnmarshalText(data); err != nil {
-			log.Errorf(ctx, "Reading %s: %v", obj.Key, err)
+		if err := updateNARInfoCache(ctx, conn, hash, data); err != nil {
+			log.Errorf(ctx, "Unable to update cache for %s: %v", obj.Key, err)
 			continue
 		}
+	}
+}
+
+func updateNARInfoCache(ctx context.Context, conn *sqlite.Conn, hash string, data []byte) (err error) {
+	key := hash + narInfoExtension
+	defer sqlitex.Save(conn)(&err)
+
+	// Reset the parsed fields and set the raw data.
+	const clearQuery = `update "nar_infos" set "narinfo" = :narinfo, ` +
+		`"store_path" = null, "file_size" = null, "nar_size" = null ` +
+		`where "hash" = :hash;`
+	err = sqlitex.Execute(conn, clearQuery, &sqlitex.ExecOptions{
+		Named: map[string]any{
+			":hash":    hash,
+			":narinfo": data,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("update %s cache: clear columns: %v", key, err)
+	}
+	err = sqlitex.Execute(conn, `delete from "nar_references" where "object_hash" = ?;`, &sqlitex.ExecOptions{
+		Args: []any{hash},
+	})
+	if err != nil {
+		return fmt.Errorf("update %s cache: clear references: %v", key, err)
+	}
+
+	// Parse the raw data and update fields as needed.
+	err = func() (err error) {
+		defer sqlitex.Save(conn)(&err)
+		info := new(nixstore.NARInfo)
+		if err := info.UnmarshalText(data); err != nil {
+			return err
+		}
 		if info.ObjectName().Hash() != hash {
-			log.Errorf(ctx, "%s has store path %q with inconsistent hash (skipping)", obj.Key, info.StorePath)
-			continue
+			return fmt.Errorf("%s has store path %q with inconsistent hash (skipping)", key, info.StorePath)
 		}
 		err = sqlitex.Execute(
 			conn,
-			`update "nar_infos" set "narinfo" = :narinfo, "store_path" = :store_path, `+
+			`update "nar_infos" set "store_path" = :store_path, `+
 				`"file_size" = iif(:file_size > 0, :file_size, null), `+
 				`"nar_size" = :nar_size `+
 				`where "hash" = :hash;`,
 			&sqlitex.ExecOptions{
 				Named: map[string]any{
 					":hash":       hash,
-					":narinfo":    data,
 					":store_path": info.StorePath,
 					":file_size":  info.FileSize,
 					":nar_size":   info.NARSize,
@@ -202,8 +251,24 @@ func crawl(ctx context.Context, conn *sqlite.Conn, bucket *blob.Bucket) {
 			},
 		)
 		if err != nil {
-			log.Errorf(ctx, "Saving %s from crawl: %v", obj.Key, err)
-			continue
+			return err
 		}
+		for _, ref := range info.References {
+			err = sqlitex.Execute(
+				conn,
+				`insert into "nar_references" ("object_hash", "reference") values (?, ?);`,
+				&sqlitex.ExecOptions{
+					Args: []any{hash, string(ref)},
+				},
+			)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}()
+	if err != nil {
+		log.Errorf(ctx, "Updating indexed fields for %s: %v", key, err)
 	}
+	return nil
 }

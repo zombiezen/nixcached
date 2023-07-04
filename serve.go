@@ -19,11 +19,14 @@ package main
 import (
 	"context"
 	"embed"
+	"fmt"
+	"html/template"
 	"io/fs"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -175,6 +178,9 @@ func (srv *bucketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ReportError: func(ctx context.Context, err error) {
 			log.Errorf(ctx, "%s %s: %v", r.Method, r.URL.Path, err)
 		},
+		TemplateFuncs: template.FuncMap{
+			"size": formatSize,
+		},
 	}
 	var err error
 	cfg.TemplateFiles, err = fs.Sub(srv.resources, "templates")
@@ -212,6 +218,9 @@ func (srv *bucketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}.ServeHTTP(w, r)
 }
 
+//go:embed uicache_index.sql
+var indexQuery string
+
 func (srv *bucketServer) serveIndex(ctx context.Context, r *http.Request) (_ *action.Response, err error) {
 	conn, err := srv.cache.Get(ctx)
 	if err != nil {
@@ -220,9 +229,14 @@ func (srv *bucketServer) serveIndex(ctx context.Context, r *http.Request) (_ *ac
 	defer srv.cache.Put(conn)
 	defer sqlitex.Transaction(conn)(&err)
 
+	type expandedNARInfo struct {
+		*nixstore.NARInfo
+		ClosureFileSize int64
+		ClosureNARSize  int64
+	}
 	var data struct {
 		InitialCrawlComplete bool
-		Infos                []*nixstore.NARInfo
+		Infos                []expandedNARInfo
 	}
 	err = sqlitex.Execute(conn, `select "initial_crawl_complete" from "uicache_status";`, &sqlitex.ExecOptions{
 		ResultFunc: func(stmt *sqlite.Stmt) error {
@@ -236,27 +250,27 @@ func (srv *bucketServer) serveIndex(ctx context.Context, r *http.Request) (_ *ac
 
 	if data.InitialCrawlComplete {
 		var buf []byte
-		err = sqlitex.Execute(
-			conn,
-			`select "hash" as "hash", "narinfo" as "narinfo" from "nar_infos" order by store_path_name("store_path") nulls last;`,
-			&sqlitex.ExecOptions{
-				ResultFunc: func(stmt *sqlite.Stmt) error {
-					if n := stmt.GetLen("narinfo"); n > cap(buf) {
-						buf = make([]byte, n)
-					} else {
-						buf = buf[:n]
-					}
-					stmt.GetBytes("narinfo", buf)
-					info := new(nixstore.NARInfo)
-					if err := info.UnmarshalText(buf); err != nil {
-						log.Warnf(ctx, "Unable to parse %s.narinfo: %v", stmt.GetText("hash"), buf)
-						return nil
-					}
-					data.Infos = append(data.Infos, info)
+		err = sqlitex.Execute(conn, strings.TrimSpace(indexQuery), &sqlitex.ExecOptions{
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				if n := stmt.GetLen("narinfo"); n > cap(buf) {
+					buf = make([]byte, n)
+				} else {
+					buf = buf[:n]
+				}
+				stmt.GetBytes("narinfo", buf)
+				info := new(nixstore.NARInfo)
+				if err := info.UnmarshalText(buf); err != nil {
+					log.Warnf(ctx, "Unable to parse %s.narinfo: %v", stmt.GetText("hash"), buf)
 					return nil
-				},
+				}
+				data.Infos = append(data.Infos, expandedNARInfo{
+					NARInfo:         info,
+					ClosureFileSize: stmt.GetInt64("closure_file_size"),
+					ClosureNARSize:  stmt.GetInt64("closure_nar_size"),
+				})
+				return nil
 			},
-		)
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -312,5 +326,36 @@ func (srv *bucketServer) serveContent(w http.ResponseWriter, r *http.Request) {
 		log.Errorf(ctx, "Unable to read %s: %v", key, err)
 		http.Error(w, "unable to read "+key, http.StatusBadGateway)
 		return
+	}
+}
+
+func formatSize(v reflect.Value) (string, error) {
+	var x float64
+	switch v.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		x = float64(v.Int())
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		x = float64(v.Uint())
+	default:
+		return "", fmt.Errorf("cannot use formatSize on %v", v.Type())
+	}
+
+	abs := x
+	if x < 0 {
+		abs = -x
+	}
+	switch {
+	case abs == 1:
+		return fmt.Sprintf("%d byte", int16(x)), nil
+	case x < 1<<9:
+		return fmt.Sprintf("%d bytes", int16(x)), nil
+	case x < 1<<20:
+		return fmt.Sprintf("%.1f KiB", x/(1<<10)), nil
+	case x < 1<<30:
+		return fmt.Sprintf("%.1f MiB", x/(1<<20)), nil
+	case x < 1<<40:
+		return fmt.Sprintf("%.1f GiB", x/(1<<30)), nil
+	default:
+		return fmt.Sprintf("%.1f TiB", x/(1<<40)), nil
 	}
 }

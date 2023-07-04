@@ -11,6 +11,18 @@ create table "nar_infos" (
     check("nar_size" is null or "nar_size" >= 0)
 );
 
+create table "nar_references" (
+  "object_hash" text
+    not null
+    references "nar_infos"
+      on delete cascade,
+  "reference" text
+    not null
+    check("reference" regexp '^[-+._?=0-9a-zA-Z]+$'),
+
+  primary key ("object_hash", "reference")
+);
+
 create table "nix_cache_info" (
   "store_dir" text,
   "nix_cache_info" blob

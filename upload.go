@@ -35,6 +35,8 @@ import (
 	"zombiezen.com/go/nixcached/internal/nixstore"
 )
 
+const narInfoExtension = ".narinfo"
+
 func newUploadCommand(g *globalConfig) *cobra.Command {
 	c := &cobra.Command{
 		Use:                   "upload [flags] BUCKET_URL",
@@ -242,7 +244,7 @@ func uploadStorePath(ctx context.Context, storeClient *nixstore.Client, destinat
 	if err != nil {
 		return err
 	}
-	narInfoKey := objectName.Hash() + ".narinfo"
+	narInfoKey := objectName.Hash() + narInfoExtension
 	if !overwrite {
 		err := checkUploadOverwrite(ctx, destination, narInfoKey, info)
 		if errors.Is(err, errStoreObjectExists) {
