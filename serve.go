@@ -17,10 +17,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"embed"
 	"fmt"
 	"html/template"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -199,6 +201,15 @@ func (srv *bucketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.URL.Path == "/"+nixstore.CacheInfoName {
+		index := cfg.NewHandler(srv.serveCacheInfo)
+		handlers.MethodHandler{
+			http.MethodGet:  index,
+			http.MethodHead: index,
+		}.ServeHTTP(w, r)
+		return
+	}
+
 	const staticPrefix = "/_/"
 	if strings.HasPrefix(r.URL.Path, staticPrefix) {
 		static, err := fs.Sub(srv.resources, "static")
@@ -279,6 +290,47 @@ func (srv *bucketServer) serveIndex(ctx context.Context, r *http.Request) (_ *ac
 	return &action.Response{
 		HTMLTemplate: "index.html",
 		TemplateData: data,
+	}, nil
+}
+
+func (srv *bucketServer) serveCacheInfo(ctx context.Context, r *http.Request) (_ *action.Response, err error) {
+	conn, err := srv.cache.Get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer srv.cache.Put(conn)
+	defer sqlitex.Transaction(conn)(&err)
+
+	var data []byte
+	err = sqlitex.Execute(conn, `select "nix_cache_info" from "nix_cache_info" limit 1;`, &sqlitex.ExecOptions{
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			data = make([]byte, stmt.ColumnLen(0))
+			stmt.ColumnBytes(0, data)
+			return nil
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	cfg := new(nixstore.Configuration)
+	if err := cfg.UnmarshalText(data); err != nil {
+		log.Warnf(ctx, "Invalid %s in bucket: %v", nixstore.CacheInfoName, err)
+		*cfg = nixstore.Configuration{}
+	}
+	cfg.WantMassQuery = true
+	data, err = cfg.MarshalText()
+	if err != nil {
+		return nil, err
+	}
+
+	return &action.Response{
+		Other: []*action.Representation{{
+			Header: http.Header{
+				"Content-Type":   {nixstore.CacheInfoMIMEType},
+				"Content-Length": {strconv.Itoa(len(data))},
+			},
+			Body: io.NopCloser(bytes.NewReader(data)),
+		}},
 	}, nil
 }
 

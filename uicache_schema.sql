@@ -24,7 +24,6 @@ create table "nar_references" (
 );
 
 create table "nix_cache_info" (
-  "store_dir" text,
   "nix_cache_info" blob
 );
 
