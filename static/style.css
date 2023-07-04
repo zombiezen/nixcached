@@ -33,9 +33,6 @@ html, body {
   padding: var(--row-padding, 0) 0.5rem;
   text-align: right;
 }
-.Listing-objectSize.Listing-objectSize--eq {
-  font-style: italic;
-}
 .Footer {
   margin: 3rem 0 1rem;
 }
