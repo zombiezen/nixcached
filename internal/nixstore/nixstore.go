@@ -24,10 +24,6 @@ import (
 	"strings"
 )
 
-// CacheInfoName is the name of the binary cache resource
-// that describes the binary cache itself.
-const CacheInfoName = "nix-cache-info"
-
 // Directory is the location of a Nix store in the local filesystem.
 type Directory string
 
