@@ -6,6 +6,30 @@ html, body {
 .Main {
   margin: 0 1rem;
 }
+.CacheInfo {
+  border: 1px solid black;
+  border-radius: 2px;
+  box-sizing: border-box;
+  margin: 1rem 0;
+  padding: 0;
+  min-width: 30rem;
+  max-width: fit-content;
+}
+.CacheInfo-codeBlock {
+  margin: 1rem 0.5rem;
+  padding: 0;
+}
+.CacheInfo-code {
+  font-family: 'Courier New', Courier, monospace;
+}
+.CacheInfo-caption {
+  background: rgba(0, 0, 0, 0.1);
+  font-style: italic;
+  margin: 0;
+  padding: 0.25rem 0.5rem;
+  text-align: right;
+  width: auto;
+}
 .Listing {
   --row-padding: 0.25rem;
 }

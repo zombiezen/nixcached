@@ -210,6 +210,25 @@ func crawl(ctx context.Context, conn *sqlite.Conn, bucket *blob.Bucket) {
 	}
 }
 
+func readCachedConfiguration(ctx context.Context, conn *sqlite.Conn) (cfg *nixstore.Configuration, raw []byte, err error) {
+	err = sqlitex.Execute(conn, `select "nix_cache_info" from "nix_cache_info" limit 1;`, &sqlitex.ExecOptions{
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			raw = make([]byte, stmt.ColumnLen(0))
+			stmt.ColumnBytes(0, raw)
+			return nil
+		},
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("read cached %s: %w", nixstore.CacheInfoName, err)
+	}
+	cfg = new(nixstore.Configuration)
+	if err := cfg.UnmarshalText(raw); err != nil {
+		log.Warnf(ctx, "Invalid %s in bucket: %v", nixstore.CacheInfoName, err)
+		*cfg = nixstore.Configuration{}
+	}
+	return cfg, raw, nil
+}
+
 func updateCacheInfoCache(ctx context.Context, conn *sqlite.Conn, data []byte) (err error) {
 	defer sqlitex.Save(conn)(&err)
 

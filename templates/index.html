@@ -7,7 +7,15 @@
     <h1>Hang tight</h1>
     <p>Loading contents, please wait&hellip;</p>
   {{- else }}
-    <h1>Listing</h1>
+    <h1>{{ .Configuration.StoreDir }}</h1>
+    <figure class="CacheInfo">
+      <pre class="CacheInfo-codeBlock"><code class="CacheInfo-code">
+        {{- .Configuration.MarshalText | printf "%s" -}}
+      </code></pre>
+      <figcaption class="CacheInfo-caption">from <a href="/nix-cache-info">nix-cache-info</a></figcaption>
+    </figure>
+
+    <h2>Objects</h2>
     {{- with .Infos }}
       <table class="Listing">
         <thead>

@@ -247,6 +247,7 @@ func (srv *bucketServer) serveIndex(ctx context.Context, r *http.Request) (_ *ac
 	}
 	var data struct {
 		InitialCrawlComplete bool
+		Configuration        *nixstore.Configuration
 		Infos                []expandedNARInfo
 	}
 	err = sqlitex.Execute(conn, `select "initial_crawl_complete" from "uicache_status";`, &sqlitex.ExecOptions{
@@ -260,6 +261,17 @@ func (srv *bucketServer) serveIndex(ctx context.Context, r *http.Request) (_ *ac
 	}
 
 	if data.InitialCrawlComplete {
+		data.Configuration, _, err = readCachedConfiguration(ctx, conn)
+		if err != nil {
+			log.Warnf(ctx, "%v", err)
+			data.Configuration = new(nixstore.Configuration)
+		}
+		if data.Configuration.StoreDir == "" {
+			data.Configuration.StoreDir = nixstore.DefaultDirectory
+		}
+		// To match served version:
+		data.Configuration.WantMassQuery = true
+
 		var buf []byte
 		err = sqlitex.Execute(conn, strings.TrimSpace(indexQuery), &sqlitex.ExecOptions{
 			ResultFunc: func(stmt *sqlite.Stmt) error {
@@ -301,24 +313,12 @@ func (srv *bucketServer) serveCacheInfo(ctx context.Context, r *http.Request) (_
 	defer srv.cache.Put(conn)
 	defer sqlitex.Transaction(conn)(&err)
 
-	var data []byte
-	err = sqlitex.Execute(conn, `select "nix_cache_info" from "nix_cache_info" limit 1;`, &sqlitex.ExecOptions{
-		ResultFunc: func(stmt *sqlite.Stmt) error {
-			data = make([]byte, stmt.ColumnLen(0))
-			stmt.ColumnBytes(0, data)
-			return nil
-		},
-	})
+	cfg, _, err := readCachedConfiguration(ctx, conn)
 	if err != nil {
 		return nil, err
 	}
-	cfg := new(nixstore.Configuration)
-	if err := cfg.UnmarshalText(data); err != nil {
-		log.Warnf(ctx, "Invalid %s in bucket: %v", nixstore.CacheInfoName, err)
-		*cfg = nixstore.Configuration{}
-	}
 	cfg.WantMassQuery = true
-	data, err = cfg.MarshalText()
+	data, err := cfg.MarshalText()
 	if err != nil {
 		return nil, err
 	}
