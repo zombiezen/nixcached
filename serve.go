@@ -260,7 +260,7 @@ func (srv *bucketServer) serveIndex(ctx context.Context, r *http.Request) (_ *ac
 				stmt.GetBytes("narinfo", buf)
 				info := new(nixstore.NARInfo)
 				if err := info.UnmarshalText(buf); err != nil {
-					log.Warnf(ctx, "Unable to parse %s.narinfo: %v", stmt.GetText("hash"), buf)
+					log.Warnf(ctx, "Unable to parse %s: %v", stmt.GetText("hash")+nixstore.NARInfoExtension, buf)
 					return nil
 				}
 				data.Infos = append(data.Infos, expandedNARInfo{

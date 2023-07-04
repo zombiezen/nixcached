@@ -145,7 +145,7 @@ func crawl(ctx context.Context, conn *sqlite.Conn, bucket *blob.Bucket) {
 			}
 			break
 		}
-		hash, hasExt := strings.CutSuffix(obj.Key, narInfoExtension)
+		hash, hasExt := strings.CutSuffix(obj.Key, nixstore.NARInfoExtension)
 		if obj.IsDir || !hasExt {
 			log.Debugf(ctx, "Ignoring %q during crawl", obj.Key)
 			continue
@@ -202,7 +202,7 @@ func crawl(ctx context.Context, conn *sqlite.Conn, bucket *blob.Bucket) {
 }
 
 func updateNARInfoCache(ctx context.Context, conn *sqlite.Conn, hash string, data []byte) (err error) {
-	key := hash + narInfoExtension
+	key := hash + nixstore.NARInfoExtension
 	defer sqlitex.Save(conn)(&err)
 
 	// Reset the parsed fields and set the raw data.

@@ -23,8 +23,12 @@ import (
 	"strconv"
 )
 
-// NARInfoMIMEType is the MIME content type for a .narinfo file.
-const NARInfoMIMEType = "text/x-nix-narinfo"
+const (
+	// NARInfoExtension is the file extension for a file containing NAR information.
+	NARInfoExtension = ".narinfo"
+	// NARInfoMIMEType is the MIME content type for a .narinfo file.
+	NARInfoMIMEType = "text/x-nix-narinfo"
+)
 
 // NARInfo is the parsed representation of a .narinfo file.
 type NARInfo struct {
