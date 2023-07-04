@@ -69,6 +69,9 @@ func (cfg *Configuration) UnmarshalText(data []byte) error {
 	*cfg = Configuration{}
 	for lineIdx, line := range bytes.Split(data, []byte{'\n'}) {
 		lineno := lineIdx + 1
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
 		i := bytes.IndexByte(line, ':')
 		if i == -1 {
 			return fmt.Errorf("unmarshal %s: line %d: missing ':'", CacheInfoName, lineno)

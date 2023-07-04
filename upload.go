@@ -83,6 +83,9 @@ func runUpload(ctx context.Context, g *globalConfig, destinationBucketURL string
 		return err
 	}
 	defer bucket.Close()
+	if err := ensureCacheInfo(ctx, bucket, storeDir); err != nil {
+		return err
+	}
 
 	storeClient := &nixstore.Client{
 		Log: os.Stderr,
@@ -139,6 +142,42 @@ scanLoop:
 	<-processDone
 	if err := scanner.Err(); err != nil {
 		return err
+	}
+	return nil
+}
+
+func ensureCacheInfo(ctx context.Context, bucket *blob.Bucket, localStoreDir nixstore.Directory) (err error) {
+	log.Debugf(ctx, "Verifying %s matches store path...", nixstore.CacheInfoName)
+	cacheInfoData, err := bucket.ReadAll(ctx, nixstore.CacheInfoName)
+	if gcerrors.Code(err) == gcerrors.NotFound {
+		log.Debugf(ctx, "%s does not exist (will upload): %v", nixstore.CacheInfoName, err)
+		cacheInfoData, err = (&nixstore.Configuration{StoreDir: localStoreDir}).MarshalText()
+		if err != nil {
+			return fmt.Errorf("create %s: %v", nixstore.CacheInfoName, err)
+		}
+		err = bucket.WriteAll(ctx, nixstore.CacheInfoName, cacheInfoData, &blob.WriterOptions{
+			ContentType: nixstore.CacheInfoMIMEType,
+		})
+		if err != nil {
+			return fmt.Errorf("create %s: %v", nixstore.CacheInfoName, err)
+		}
+		log.Infof(ctx, "Wrote %s with store directory %s", nixstore.CacheInfoName, localStoreDir)
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("get %s: %v", nixstore.CacheInfoName, err)
+	}
+
+	cfg := new(nixstore.Configuration)
+	if err := cfg.UnmarshalText(cacheInfoData); err != nil {
+		return fmt.Errorf("get %s: %v", nixstore.CacheInfoName, err)
+	}
+	remoteStoreDir := cfg.StoreDir
+	if remoteStoreDir == "" {
+		remoteStoreDir = nixstore.DefaultDirectory
+	}
+	if remoteStoreDir != localStoreDir {
+		return fmt.Errorf("%s: bucket uses store directory %q (expecting %q)", nixstore.CacheInfoName, remoteStoreDir, localStoreDir)
 	}
 	return nil
 }
