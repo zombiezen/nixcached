@@ -46,7 +46,9 @@ func newUploadCommand(g *globalConfig) *cobra.Command {
 	}
 	inputPath := c.Flags().String("input", "", "`path` to file with store paths (defaults to stdin)")
 	keepAlive := c.Flags().BoolP("keep-alive", "k", false, "if input is a pipe, then keep running even when there are no senders")
-	overwrite := c.Flags().BoolP("force", "f", false, "replace already-uploaded store objects")
+	opts := new(uploadOptions)
+	c.Flags().BoolVarP(&opts.overwrite, "force", "f", false, "replace already-uploaded store objects")
+	c.Flags().BoolVar(&opts.createListings, "write-nar-listing", true, "whether to write a JSON file that lists the files in each NAR")
 	c.RunE = func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		storeDir, err := nix.StoreDirectoryFromEnv()
@@ -68,12 +70,18 @@ func newUploadCommand(g *globalConfig) *cobra.Command {
 			defer f.Close()
 			input = f
 		}
-		return runUpload(cmd.Context(), g, args[0], *overwrite, input, storeDir)
+
+		return runUpload(cmd.Context(), g, args[0], input, storeDir, opts)
 	}
 	return c
 }
 
-func runUpload(ctx context.Context, g *globalConfig, destinationBucketURL string, overwrite bool, input io.Reader, storeDir nix.StoreDirectory) error {
+type uploadOptions struct {
+	overwrite      bool
+	createListings bool
+}
+
+func runUpload(ctx context.Context, g *globalConfig, destinationBucketURL string, input io.Reader, storeDir nix.StoreDirectory, opts *uploadOptions) error {
 	opener, err := newBucketURLOpener(ctx)
 	if err != nil {
 		return err
@@ -99,7 +107,7 @@ func runUpload(ctx context.Context, g *globalConfig, destinationBucketURL string
 	}()
 	go func() {
 		defer close(processDone)
-		processUploads(processCtx, storeClient, bucket, overwrite, storePaths)
+		processUploads(processCtx, storeClient, bucket, opts, storePaths)
 	}()
 
 	scanner := bufio.NewScanner(input)
@@ -188,7 +196,7 @@ func ensureCacheInfo(ctx context.Context, bucket *blob.Bucket, localStoreDir nix
 
 // processUploads performs the uploads requested from a channel of store paths.
 // It is assumed that the store paths have been validated before being sent on the channel.
-func processUploads(ctx context.Context, storeClient *nixstore.Client, destination *blob.Bucket, overwrite bool, storePaths <-chan nix.StorePath) {
+func processUploads(ctx context.Context, storeClient *nixstore.Client, destination *blob.Bucket, opts *uploadOptions, storePaths <-chan nix.StorePath) {
 	storePathBatch := make([]nix.StorePath, 0, 100)
 
 	for {
@@ -227,7 +235,7 @@ func processUploads(ctx context.Context, storeClient *nixstore.Client, destinati
 		// TODO(soon): Make concurrent.
 		for _, info := range set {
 			log.Infof(ctx, "Uploading %s...", info.StorePath)
-			if err := uploadStorePath(ctx, storeClient, destination, info, overwrite); err != nil {
+			if err := uploadStorePath(ctx, storeClient, destination, info, opts); err != nil {
 				log.Errorf(ctx, "Failed: %v", err)
 				continue
 			}
@@ -278,7 +286,7 @@ func gatherStorePathSet(ctx context.Context, storeClient *nixstore.Client, store
 	return result
 }
 
-func uploadStorePath(ctx context.Context, storeClient *nixstore.Client, destination *blob.Bucket, info *nix.NARInfo, overwrite bool) (err error) {
+func uploadStorePath(ctx context.Context, storeClient *nixstore.Client, destination *blob.Bucket, info *nix.NARInfo, opts *uploadOptions) (err error) {
 	defer func() {
 		if err != nil {
 			err = fmt.Errorf("upload %s: %v", info.StorePath, err)
@@ -286,7 +294,7 @@ func uploadStorePath(ctx context.Context, storeClient *nixstore.Client, destinat
 	}()
 
 	narInfoKey := info.StorePath.Digest() + nix.NARInfoExtension
-	if !overwrite {
+	if !opts.overwrite {
 		err := checkUploadOverwrite(ctx, destination, narInfoKey, info)
 		if errors.Is(err, errStoreObjectExists) {
 			log.Infof(ctx, "Skipping %s: %v", info.StorePath, err)
@@ -309,36 +317,24 @@ func uploadStorePath(ctx context.Context, storeClient *nixstore.Client, destinat
 		}
 	}()
 
-	compressedHashWriter := newHashWriter(nix.SHA256, f)
-	compressedMD5Writer := newHashWriter(nix.MD5, compressedHashWriter)
-	bzWriter, err := bzip2.NewWriter(compressedMD5Writer, nil)
+	writtenInfo, listing, md5Hash, err := dump(ctx, f, info.StorePath, opts.createListings)
 	if err != nil {
-		return fmt.Errorf("upload %s: %v", info.StorePath, err)
-	}
-	uncompressedHashWriter := newHashWriter(nix.SHA256, bzWriter)
-	if err := nar.DumpPath(uncompressedHashWriter, string(info.StorePath)); err != nil {
-		return fmt.Errorf("upload %s: %v", info.StorePath, err)
-	}
-	if err := bzWriter.Close(); err != nil {
-		return fmt.Errorf("upload %s: %v", info.StorePath, err)
-	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("upload %s: %v", info.StorePath, err)
 	}
 
 	// Dump succeeded. Compare information about this store path
 	// to what we had queried before uploading to bucket.
-	if got, want := uncompressedHashWriter.sum(), info.NARHash; !got.Equal(want) {
+	if got, want := writtenInfo.NARHash, info.NARHash; !got.Equal(want) {
 		return fmt.Errorf("upload %s: uncompressed nar hash %v did not match store-reported hash %v", info.StorePath, got, want)
 	}
-	if got, want := uncompressedHashWriter.n, info.NARSize; got != want {
+	if got, want := writtenInfo.NARSize, info.NARSize; got != want {
 		return fmt.Errorf("upload %s: uncompressed nar size %d did not match store-reported size %d", info.StorePath, got, want)
 	}
 	info = info.Clone()
-	info.FileHash = compressedHashWriter.sum()
-	info.FileSize = compressedHashWriter.n
-	info.URL = "nar/" + info.FileHash.RawBase32() + ".nar.bz2"
-	info.Compression = nix.Bzip2
+	info.FileHash = writtenInfo.FileHash
+	info.FileSize = writtenInfo.FileSize
+	info.URL = writtenInfo.URL
+	info.Compression = writtenInfo.Compression
 	narInfoData, err := info.MarshalText()
 	if err != nil {
 		return fmt.Errorf("upload %s: %v", info.StorePath, err)
@@ -346,13 +342,30 @@ func uploadStorePath(ctx context.Context, storeClient *nixstore.Client, destinat
 
 	// Now that we've succeeded locally, make changes to the bucket.
 	// Start with the content so that clients don't observe dangling objects.
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("upload %s: %v", info.StorePath, err)
+	}
 	err = destination.Upload(ctx, info.URL, f, &blob.WriterOptions{
-		ContentType:     "application/x-nix-nar",
+		ContentType:     nar.MIMEType,
 		ContentEncoding: "bzip2",
-		ContentMD5:      compressedMD5Writer.sum().Bytes(nil),
+		ContentMD5:      md5Hash.Bytes(nil),
 	})
 	if err != nil {
 		return fmt.Errorf("upload %s: %v", info.StorePath, err)
+	}
+	if listing != nil {
+		listingData, err := listing.MarshalJSON()
+		if err != nil {
+			log.Errorf(ctx, "Unable to marshal listing for %s: %v", info.StorePath, err)
+		} else {
+			listingKey := info.StorePath.Digest() + nar.ListingExtension
+			err := destination.WriteAll(ctx, listingKey, listingData, &blob.WriterOptions{
+				ContentType: nar.ListingMIMEType,
+			})
+			if err != nil {
+				log.Warnf(ctx, "Failed to upload listing for %s: %v", info.StorePath, err)
+			}
+		}
 	}
 	err = destination.WriteAll(ctx, narInfoKey, narInfoData, &blob.WriterOptions{
 		ContentType: nix.NARInfoMIMEType,
@@ -362,6 +375,63 @@ func uploadStorePath(ctx context.Context, storeClient *nixstore.Client, destinat
 	}
 
 	return nil
+}
+
+// dump archives the store path to a compressed NAR file in w.
+// Optionally, it also generates a listing of the NAR file.
+func dump(ctx context.Context, w io.Writer, path nix.StorePath, listing bool) (info *nix.NARInfo, ls *nar.Listing, md5Hash nix.Hash, err error) {
+	compressedHashWriter := newHashWriter(nix.SHA256, w)
+	compressedMD5Writer := newHashWriter(nix.MD5, compressedHashWriter)
+	bzWriter, err := bzip2.NewWriter(compressedMD5Writer, nil)
+	if err != nil {
+		return nil, nil, nix.Hash{}, err
+	}
+	uncompressedHashWriter := newHashWriter(nix.SHA256, bzWriter)
+
+	var dumpOutput io.Writer = uncompressedHashWriter
+	var listingWriter *io.PipeWriter
+	var listingChan chan *nar.Listing
+	if listing {
+		var uncompressedReader *io.PipeReader
+		uncompressedReader, listingWriter = io.Pipe()
+		listingChan = make(chan *nar.Listing, 1)
+		go func() {
+			defer close(listingChan)
+			ls, err := nar.List(bufio.NewReader(uncompressedReader))
+			if err != nil {
+				log.Errorf(ctx, "Could produce listing from dump of %s (likely a bug): %v", path, err)
+				return
+			}
+			listingChan <- ls
+		}()
+		defer func() {
+			listingWriter.CloseWithError(errors.New("dump aborted"))
+			<-listingChan
+		}()
+		dumpOutput = io.MultiWriter(dumpOutput, listingWriter)
+	}
+
+	if err := nar.DumpPath(dumpOutput, string(path)); err != nil {
+		return nil, nil, nix.Hash{}, err
+	}
+	if err := bzWriter.Close(); err != nil {
+		return nil, nil, nix.Hash{}, err
+	}
+	if listing {
+		listingWriter.Close()
+		ls = <-listingChan
+	}
+
+	info = &nix.NARInfo{
+		StorePath:   path,
+		Compression: nix.Bzip2,
+		NARHash:     uncompressedHashWriter.sum(),
+		NARSize:     uncompressedHashWriter.n,
+		FileHash:    compressedHashWriter.sum(),
+		FileSize:    compressedHashWriter.n,
+	}
+	info.URL = "nar/" + info.FileHash.RawBase32() + ".nar.bz2"
+	return info, ls, compressedMD5Writer.sum(), nil
 }
 
 // checkUploadOverwrite determines whether there is
