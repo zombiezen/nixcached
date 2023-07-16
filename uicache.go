@@ -29,7 +29,7 @@ import (
 	"gocloud.dev/blob"
 	"gocloud.dev/gcerrors"
 	"zombiezen.com/go/log"
-	"zombiezen.com/go/nixcached/internal/nixstore"
+	"zombiezen.com/go/nix"
 	"zombiezen.com/go/sqlite"
 	"zombiezen.com/go/sqlite/ext/refunc"
 	"zombiezen.com/go/sqlite/sqlitemigration"
@@ -68,11 +68,11 @@ func prepareUICacheConn(conn *sqlite.Conn) error {
 			if args[0].Type() == sqlite.TypeNull {
 				return sqlite.Value{}, nil
 			}
-			name, err := nixstore.ParseObjectName(slashpath.Base(args[0].Text()))
+			p, err := nix.DefaultStoreDirectory.Object(slashpath.Base(args[0].Text()))
 			if err != nil {
 				return sqlite.Value{}, nil
 			}
-			return sqlite.TextValue(name.Hash()), nil
+			return sqlite.TextValue(p.Digest()), nil
 		},
 	})
 	conn.CreateFunction("store_path_name", &sqlite.FunctionImpl{
@@ -82,11 +82,11 @@ func prepareUICacheConn(conn *sqlite.Conn) error {
 			if args[0].Type() == sqlite.TypeNull {
 				return sqlite.Value{}, nil
 			}
-			name, err := nixstore.ParseObjectName(slashpath.Base(args[0].Text()))
+			p, err := nix.DefaultStoreDirectory.Object(slashpath.Base(args[0].Text()))
 			if err != nil {
 				return sqlite.Value{}, nil
 			}
-			return sqlite.TextValue(name.Name()), nil
+			return sqlite.TextValue(p.Name()), nil
 		},
 	})
 	return nil
@@ -118,28 +118,28 @@ func crawl(ctx context.Context, conn *sqlite.Conn, bucket *blob.Bucket) {
 	}
 
 	// Read /nix-cache-info first.
-	storeDir := nixstore.DefaultDirectory
-	if data, err := bucket.ReadAll(ctx, nixstore.CacheInfoName); err == nil {
-		cfg := new(nixstore.Configuration)
-		if err := cfg.UnmarshalText(data); err != nil {
-			log.Warnf(ctx, "Invalid %s in bucket: %v", nixstore.CacheInfoName, err)
-		} else if cfg.StoreDir != "" {
-			storeDir = cfg.StoreDir
+	storeDir := nix.DefaultStoreDirectory
+	if data, err := bucket.ReadAll(ctx, nix.CacheInfoName); err == nil {
+		cacheInfo := new(nix.CacheInfo)
+		if err := cacheInfo.UnmarshalText(data); err != nil {
+			log.Warnf(ctx, "Invalid %s in bucket: %v", nix.CacheInfoName, err)
+		} else if cacheInfo.StoreDirectory != "" {
+			storeDir = cacheInfo.StoreDirectory
 		}
 
 		if data == nil { // nil data is treated as not present.
 			data = []byte{}
 		}
 		if err := updateCacheInfoCache(ctx, conn, data); err != nil {
-			log.Warnf(ctx, "Caching %s: %v", nixstore.CacheInfoMIMEType, err)
+			log.Warnf(ctx, "Caching %s: %v", nix.CacheInfoMIMEType, err)
 		}
 	} else if gcerrors.Code(err) == gcerrors.NotFound {
-		log.Debugf(ctx, "Bucket does not have a %s file", nixstore.CacheInfoName)
+		log.Debugf(ctx, "Bucket does not have a %s file", nix.CacheInfoName)
 		if err := updateCacheInfoCache(ctx, conn, nil); err != nil {
-			log.Warnf(ctx, "Caching %s 404: %v", nixstore.CacheInfoMIMEType, err)
+			log.Warnf(ctx, "Caching %s 404: %v", nix.CacheInfoMIMEType, err)
 		}
 	} else {
-		log.Warnf(ctx, "Could not read %s: %v", nixstore.CacheInfoName, err)
+		log.Warnf(ctx, "Could not read %s: %v", nix.CacheInfoName, err)
 	}
 
 	// Read NAR metadata.
@@ -154,12 +154,12 @@ func crawl(ctx context.Context, conn *sqlite.Conn, bucket *blob.Bucket) {
 			}
 			break
 		}
-		hash, hasExt := strings.CutSuffix(obj.Key, nixstore.NARInfoExtension)
+		hash, hasExt := strings.CutSuffix(obj.Key, nix.NARInfoExtension)
 		if obj.IsDir || !hasExt {
 			log.Debugf(ctx, "Ignoring %q during crawl", obj.Key)
 			continue
 		}
-		if objectName, err := nixstore.ParseObjectName(hash + "-x"); err != nil || objectName.Hash() != hash || objectName.Name() != "x" {
+		if p, err := storeDir.Object(hash + "-x"); err != nil || p.Digest() != hash || p.Name() != "x" {
 			log.Warnf(ctx, "Ignoring improperly named %q", obj.Key)
 			continue
 		}
@@ -210,7 +210,7 @@ func crawl(ctx context.Context, conn *sqlite.Conn, bucket *blob.Bucket) {
 	}
 }
 
-func readCachedConfiguration(ctx context.Context, conn *sqlite.Conn) (cfg *nixstore.Configuration, raw []byte, err error) {
+func readCachedCacheInfo(ctx context.Context, conn *sqlite.Conn) (info *nix.CacheInfo, raw []byte, err error) {
 	err = sqlitex.Execute(conn, `select "nix_cache_info" from "nix_cache_info" limit 1;`, &sqlitex.ExecOptions{
 		ResultFunc: func(stmt *sqlite.Stmt) error {
 			raw = make([]byte, stmt.ColumnLen(0))
@@ -219,14 +219,14 @@ func readCachedConfiguration(ctx context.Context, conn *sqlite.Conn) (cfg *nixst
 		},
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("read cached %s: %w", nixstore.CacheInfoName, err)
+		return nil, nil, fmt.Errorf("read cached %s: %w", nix.CacheInfoName, err)
 	}
-	cfg = new(nixstore.Configuration)
-	if err := cfg.UnmarshalText(raw); err != nil {
-		log.Warnf(ctx, "Invalid %s in bucket: %v", nixstore.CacheInfoName, err)
-		*cfg = nixstore.Configuration{}
+	info = new(nix.CacheInfo)
+	if err := info.UnmarshalText(raw); err != nil {
+		log.Warnf(ctx, "Invalid %s in bucket: %v", nix.CacheInfoName, err)
+		*info = nix.CacheInfo{}
 	}
-	return cfg, raw, nil
+	return info, raw, nil
 }
 
 func updateCacheInfoCache(ctx context.Context, conn *sqlite.Conn, data []byte) (err error) {
@@ -242,14 +242,14 @@ func updateCacheInfoCache(ctx context.Context, conn *sqlite.Conn, data []byte) (
 		Args: []any{data},
 	})
 	if err != nil {
-		return fmt.Errorf("store %s: %v", nixstore.CacheInfoName, err)
+		return fmt.Errorf("store %s: %v", nix.CacheInfoName, err)
 	}
-	log.Debugf(ctx, "Cached %d-byte %s file", len(data), nixstore.CacheInfoName)
+	log.Debugf(ctx, "Cached %d-byte %s file", len(data), nix.CacheInfoName)
 	return nil
 }
 
-func updateNARInfoCache(ctx context.Context, conn *sqlite.Conn, storeDir nixstore.Directory, hash string, data []byte) (err error) {
-	key := hash + nixstore.NARInfoExtension
+func updateNARInfoCache(ctx context.Context, conn *sqlite.Conn, storeDir nix.StoreDirectory, hash string, data []byte) (err error) {
+	key := hash + nix.NARInfoExtension
 	defer sqlitex.Save(conn)(&err)
 
 	// Reset the parsed fields and set the raw data.
@@ -275,14 +275,14 @@ func updateNARInfoCache(ctx context.Context, conn *sqlite.Conn, storeDir nixstor
 	// Parse the raw data and update fields as needed.
 	err = func() (err error) {
 		defer sqlitex.Save(conn)(&err)
-		info := new(nixstore.NARInfo)
+		info := new(nix.NARInfo)
 		if err := info.UnmarshalText(data); err != nil {
 			return err
 		}
-		if info.ObjectName().Hash() != hash {
+		if info.StorePath.Digest() != hash {
 			return fmt.Errorf("%s has store path %q with inconsistent hash (skipping)", key, info.StorePath)
 		}
-		if info.Directory() != storeDir {
+		if info.StoreDirectory() != storeDir {
 			return fmt.Errorf("%s has store path %q that does not match cache store directory %q", key, info.StorePath, storeDir)
 		}
 		err = sqlitex.Execute(
@@ -308,7 +308,7 @@ func updateNARInfoCache(ctx context.Context, conn *sqlite.Conn, storeDir nixstor
 				conn,
 				`insert into "nar_references" ("object_hash", "reference") values (?, ?);`,
 				&sqlitex.ExecOptions{
-					Args: []any{hash, string(ref)},
+					Args: []any{hash, string(ref.Base())},
 				},
 			)
 			if err != nil {

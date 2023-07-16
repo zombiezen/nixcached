@@ -7,10 +7,10 @@
     <h1>Hang tight</h1>
     <p>Loading contents, please wait&hellip;</p>
   {{- else }}
-    <h1>{{ .Configuration.StoreDir }}</h1>
+    <h1>{{ .CacheInfo.StoreDirectory }}</h1>
     <figure class="CacheInfo">
       <pre class="CacheInfo-codeBlock"><code class="CacheInfo-code">
-        {{- .Configuration.MarshalText | printf "%s" -}}
+        {{- .CacheInfo.MarshalText | printf "%s" -}}
       </code></pre>
       <figcaption class="CacheInfo-caption">from <a href="/nix-cache-info">nix-cache-info</a></figcaption>
     </figure>
@@ -28,10 +28,10 @@
           {{- range . }}
             <tr>
               <th scope="row" class="Listing-objectName">
-                {{- .ObjectName.Name -}}
+                {{- .StorePath.Name -}}
               </th>
               <td class="Listing-objectHash">
-                <a href="{{ .ObjectName.Hash }}.narinfo">{{ .ObjectName.Hash }}</a>
+                <a href="{{ .StorePath.Digest }}.narinfo">{{ .StorePath.Digest }}</a>
               </td>
               {{- if eq .NARSize .ClosureNARSize }}
                 <td class="Listing-objectSize" colspan="2">

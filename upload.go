@@ -21,10 +21,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"hash"
 	"io"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/dsnet/compress/bzip2"
@@ -32,6 +30,8 @@ import (
 	"gocloud.dev/blob"
 	"gocloud.dev/gcerrors"
 	"zombiezen.com/go/log"
+	"zombiezen.com/go/nix"
+	"zombiezen.com/go/nix/nar"
 	"zombiezen.com/go/nixcached/internal/nixstore"
 )
 
@@ -49,7 +49,7 @@ func newUploadCommand(g *globalConfig) *cobra.Command {
 	overwrite := c.Flags().BoolP("force", "f", false, "replace already-uploaded store objects")
 	c.RunE = func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-		storeDir, err := nixstore.DirectoryFromEnv()
+		storeDir, err := nix.StoreDirectoryFromEnv()
 		if err != nil {
 			return err
 		}
@@ -73,7 +73,7 @@ func newUploadCommand(g *globalConfig) *cobra.Command {
 	return c
 }
 
-func runUpload(ctx context.Context, g *globalConfig, destinationBucketURL string, overwrite bool, input io.Reader, storeDir nixstore.Directory) error {
+func runUpload(ctx context.Context, g *globalConfig, destinationBucketURL string, overwrite bool, input io.Reader, storeDir nix.StoreDirectory) error {
 	opener, err := newBucketURLOpener(ctx)
 	if err != nil {
 		return err
@@ -91,7 +91,7 @@ func runUpload(ctx context.Context, g *globalConfig, destinationBucketURL string
 		Log: os.Stderr,
 	}
 	processDone := make(chan struct{})
-	storePaths := make(chan string)
+	storePaths := make(chan nix.StorePath)
 	processCtx, cancelProcess := context.WithCancel(ctx)
 	defer func() {
 		cancelProcess()
@@ -121,15 +121,19 @@ scanLoop:
 			return ctx.Err()
 		}
 
-		storePath := scanner.Text()
-		log.Debugf(ctx, "Received %q as input", storePath)
-		name, ok := storeDir.ParseStorePath(storePath)
-		if !ok {
-			log.Warnf(ctx, "Received invalid store path %q, skipping.", storePath)
+		rawStorePath := scanner.Text()
+		log.Debugf(ctx, "Received %q as input", rawStorePath)
+		storePath, sub, err := storeDir.ParsePath(rawStorePath)
+		if err != nil {
+			log.Warnf(ctx, "Received invalid store path %q, skipping: %v", rawStorePath, err)
 			continue
 		}
-		if name.IsDerivation() {
-			log.Warnf(ctx, "Received store derivation path %q, skipping.", storePath)
+		if sub != "" {
+			log.Warnf(ctx, "Received path %q with subpath, skipping.", rawStorePath)
+			continue
+		}
+		if storePath.IsDerivation() {
+			log.Warnf(ctx, "Received store derivation path %q, skipping.", rawStorePath)
 			continue
 		}
 		select {
@@ -146,46 +150,46 @@ scanLoop:
 	return nil
 }
 
-func ensureCacheInfo(ctx context.Context, bucket *blob.Bucket, localStoreDir nixstore.Directory) (err error) {
-	log.Debugf(ctx, "Verifying %s matches store path...", nixstore.CacheInfoName)
-	cacheInfoData, err := bucket.ReadAll(ctx, nixstore.CacheInfoName)
+func ensureCacheInfo(ctx context.Context, bucket *blob.Bucket, localStoreDir nix.StoreDirectory) (err error) {
+	log.Debugf(ctx, "Verifying %s matches store path...", nix.CacheInfoName)
+	cacheInfoData, err := bucket.ReadAll(ctx, nix.CacheInfoName)
 	if gcerrors.Code(err) == gcerrors.NotFound {
-		log.Debugf(ctx, "%s does not exist (will upload): %v", nixstore.CacheInfoName, err)
-		cacheInfoData, err = (&nixstore.Configuration{StoreDir: localStoreDir}).MarshalText()
+		log.Debugf(ctx, "%s does not exist (will upload): %v", nix.CacheInfoName, err)
+		cacheInfoData, err = (&nix.CacheInfo{StoreDirectory: localStoreDir}).MarshalText()
 		if err != nil {
-			return fmt.Errorf("create %s: %v", nixstore.CacheInfoName, err)
+			return fmt.Errorf("create %s: %v", nix.CacheInfoName, err)
 		}
-		err = bucket.WriteAll(ctx, nixstore.CacheInfoName, cacheInfoData, &blob.WriterOptions{
-			ContentType: nixstore.CacheInfoMIMEType,
+		err = bucket.WriteAll(ctx, nix.CacheInfoName, cacheInfoData, &blob.WriterOptions{
+			ContentType: nix.CacheInfoMIMEType,
 		})
 		if err != nil {
-			return fmt.Errorf("create %s: %v", nixstore.CacheInfoName, err)
+			return fmt.Errorf("create %s: %v", nix.CacheInfoName, err)
 		}
-		log.Infof(ctx, "Wrote %s with store directory %s", nixstore.CacheInfoName, localStoreDir)
+		log.Infof(ctx, "Wrote %s with store directory %s", nix.CacheInfoName, localStoreDir)
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("get %s: %v", nixstore.CacheInfoName, err)
+		return fmt.Errorf("get %s: %v", nix.CacheInfoName, err)
 	}
 
-	cfg := new(nixstore.Configuration)
-	if err := cfg.UnmarshalText(cacheInfoData); err != nil {
-		return fmt.Errorf("get %s: %v", nixstore.CacheInfoName, err)
+	info := new(nix.CacheInfo)
+	if err := info.UnmarshalText(cacheInfoData); err != nil {
+		return fmt.Errorf("get %s: %v", nix.CacheInfoName, err)
 	}
-	remoteStoreDir := cfg.StoreDir
+	remoteStoreDir := info.StoreDirectory
 	if remoteStoreDir == "" {
-		remoteStoreDir = nixstore.DefaultDirectory
+		remoteStoreDir = nix.DefaultStoreDirectory
 	}
 	if remoteStoreDir != localStoreDir {
-		return fmt.Errorf("%s: bucket uses store directory %q (expecting %q)", nixstore.CacheInfoName, remoteStoreDir, localStoreDir)
+		return fmt.Errorf("%s: bucket uses store directory %q (expecting %q)", nix.CacheInfoName, remoteStoreDir, localStoreDir)
 	}
 	return nil
 }
 
 // processUploads performs the uploads requested from a channel of store paths.
 // It is assumed that the store paths have been validated before being sent on the channel.
-func processUploads(ctx context.Context, storeClient *nixstore.Client, destination *blob.Bucket, overwrite bool, storePaths <-chan string) {
-	storePathBatch := make([]string, 0, 100)
+func processUploads(ctx context.Context, storeClient *nixstore.Client, destination *blob.Bucket, overwrite bool, storePaths <-chan nix.StorePath) {
+	storePathBatch := make([]nix.StorePath, 0, 100)
 
 	for {
 		storePathBatch = storePathBatch[:0]
@@ -235,9 +239,13 @@ func processUploads(ctx context.Context, storeClient *nixstore.Client, destinati
 // starting at the given store paths.
 // Upon encountering an error, gatherStorePathSet will log the error
 // and attempt to gather as much information about other store paths as possible.
-func gatherStorePathSet(ctx context.Context, storeClient *nixstore.Client, storePaths []string) []*nixstore.NARInfo {
+func gatherStorePathSet(ctx context.Context, storeClient *nixstore.Client, storePaths []nix.StorePath) []*nix.NARInfo {
 	// First: attempt to batch up all store paths.
-	result, err := storeClient.QueryRecursive(ctx, storePaths...)
+	queryArgs := make([]string, len(storePaths))
+	for i, p := range storePaths {
+		queryArgs[i] = string(p)
+	}
+	result, err := storeClient.QueryRecursive(ctx, queryArgs...)
 	if err == nil {
 		return result
 	} else {
@@ -246,12 +254,12 @@ func gatherStorePathSet(ctx context.Context, storeClient *nixstore.Client, store
 
 	// Otherwise, we will try each of the store paths individually.
 	result = nil
-	visited := make(map[string]struct{})
+	visited := make(map[nix.StorePath]struct{})
 	for _, p := range storePaths {
 		if _, found := visited[p]; found {
 			continue
 		}
-		individualResults, err := storeClient.QueryRecursive(ctx, p)
+		individualResults, err := storeClient.QueryRecursive(ctx, string(p))
 		if err != nil {
 			log.Warnf(ctx, "While gathering store path information: %v", err)
 			continue
@@ -270,18 +278,14 @@ func gatherStorePathSet(ctx context.Context, storeClient *nixstore.Client, store
 	return result
 }
 
-func uploadStorePath(ctx context.Context, storeClient *nixstore.Client, destination *blob.Bucket, info *nixstore.NARInfo, overwrite bool) (err error) {
+func uploadStorePath(ctx context.Context, storeClient *nixstore.Client, destination *blob.Bucket, info *nix.NARInfo, overwrite bool) (err error) {
 	defer func() {
 		if err != nil {
 			err = fmt.Errorf("upload %s: %v", info.StorePath, err)
 		}
 	}()
 
-	objectName, err := nixstore.ParseObjectName(filepath.Base(info.StorePath))
-	if err != nil {
-		return err
-	}
-	narInfoKey := objectName.Hash() + nixstore.NARInfoExtension
+	narInfoKey := info.StorePath.Digest() + nix.NARInfoExtension
 	if !overwrite {
 		err := checkUploadOverwrite(ctx, destination, narInfoKey, info)
 		if errors.Is(err, errStoreObjectExists) {
@@ -293,7 +297,7 @@ func uploadStorePath(ctx context.Context, storeClient *nixstore.Client, destinat
 		}
 	}
 
-	f, err := os.CreateTemp("", "nixcached-"+objectName.Hash()+"-*.nar.bz2")
+	f, err := os.CreateTemp("", "nixcached-"+info.StorePath.Digest()+"-*.nar.bz2")
 	if err != nil {
 		return err
 	}
@@ -305,14 +309,14 @@ func uploadStorePath(ctx context.Context, storeClient *nixstore.Client, destinat
 		}
 	}()
 
-	compressedHashWriter := newHashWriter(nixstore.SHA256, f)
-	compressedMD5Writer := newHashWriter(nixstore.MD5, compressedHashWriter)
+	compressedHashWriter := newHashWriter(nix.SHA256, f)
+	compressedMD5Writer := newHashWriter(nix.MD5, compressedHashWriter)
 	bzWriter, err := bzip2.NewWriter(compressedMD5Writer, nil)
 	if err != nil {
 		return fmt.Errorf("upload %s: %v", info.StorePath, err)
 	}
-	uncompressedHashWriter := newHashWriter(nixstore.SHA256, bzWriter)
-	if err := storeClient.DumpPath(ctx, uncompressedHashWriter, info.StorePath); err != nil {
+	uncompressedHashWriter := newHashWriter(nix.SHA256, bzWriter)
+	if err := nar.DumpPath(uncompressedHashWriter, string(info.StorePath)); err != nil {
 		return fmt.Errorf("upload %s: %v", info.StorePath, err)
 	}
 	if err := bzWriter.Close(); err != nil {
@@ -324,7 +328,7 @@ func uploadStorePath(ctx context.Context, storeClient *nixstore.Client, destinat
 
 	// Dump succeeded. Compare information about this store path
 	// to what we had queried before uploading to bucket.
-	if got, want := uncompressedHashWriter.sum(), info.NARHash; got != want {
+	if got, want := uncompressedHashWriter.sum(), info.NARHash; !got.Equal(want) {
 		return fmt.Errorf("upload %s: uncompressed nar hash %v did not match store-reported hash %v", info.StorePath, got, want)
 	}
 	if got, want := uncompressedHashWriter.n, info.NARSize; got != want {
@@ -334,7 +338,7 @@ func uploadStorePath(ctx context.Context, storeClient *nixstore.Client, destinat
 	info.FileHash = compressedHashWriter.sum()
 	info.FileSize = compressedHashWriter.n
 	info.URL = "nar/" + info.FileHash.RawBase32() + ".nar.bz2"
-	info.Compression = nixstore.Bzip2
+	info.Compression = nix.Bzip2
 	narInfoData, err := info.MarshalText()
 	if err != nil {
 		return fmt.Errorf("upload %s: %v", info.StorePath, err)
@@ -345,13 +349,13 @@ func uploadStorePath(ctx context.Context, storeClient *nixstore.Client, destinat
 	err = destination.Upload(ctx, info.URL, f, &blob.WriterOptions{
 		ContentType:     "application/x-nix-nar",
 		ContentEncoding: "bzip2",
-		ContentMD5:      compressedMD5Writer.sum().Append(nil),
+		ContentMD5:      compressedMD5Writer.sum().Bytes(nil),
 	})
 	if err != nil {
 		return fmt.Errorf("upload %s: %v", info.StorePath, err)
 	}
 	err = destination.WriteAll(ctx, narInfoKey, narInfoData, &blob.WriterOptions{
-		ContentType: nixstore.NARInfoMIMEType,
+		ContentType: nix.NARInfoMIMEType,
 	})
 	if err != nil {
 		return fmt.Errorf("upload %s: %v", info.StorePath, err)
@@ -369,7 +373,7 @@ func uploadStorePath(ctx context.Context, storeClient *nixstore.Client, destinat
 // a new .narinfo file with the union of the signatures.
 // Regardless, if the file already exists,
 // checkUploadOverwrite will return errStoreObjectExists.
-func checkUploadOverwrite(ctx context.Context, destination *blob.Bucket, narInfoKey string, localInfo *nixstore.NARInfo) error {
+func checkUploadOverwrite(ctx context.Context, destination *blob.Bucket, narInfoKey string, localInfo *nix.NARInfo) error {
 	oldNARInfoData, err := destination.ReadAll(ctx, narInfoKey)
 	if gcerrors.Code(err) == gcerrors.NotFound {
 		return nil
@@ -377,12 +381,12 @@ func checkUploadOverwrite(ctx context.Context, destination *blob.Bucket, narInfo
 	if err != nil {
 		return err
 	}
-	oldInfo := new(nixstore.NARInfo)
+	oldInfo := new(nix.NARInfo)
 	if err := oldInfo.UnmarshalText(oldNARInfoData); err != nil {
 		log.Debugf(ctx, "%s exists for %s, but can't parse file: %v", narInfoKey, localInfo.StorePath, err)
 		return errStoreObjectExists
 	}
-	if oldInfo.NARHash != localInfo.NARHash || oldInfo.NARSize != localInfo.NARSize {
+	if !oldInfo.NARHash.Equal(localInfo.NARHash) || oldInfo.NARSize != localInfo.NARSize {
 		log.Debugf(ctx, "%s exists for %s, but has hash %v (have %v locally)", narInfoKey, localInfo.StorePath, oldInfo.NARHash, localInfo.NARHash)
 		return errStoreObjectExists
 	}
@@ -401,7 +405,7 @@ func checkUploadOverwrite(ctx context.Context, destination *blob.Bucket, narInfo
 	}
 	// TODO(someday): Read-modify-write semantics on GCS.
 	err = destination.WriteAll(ctx, narInfoKey, newNARInfoData, &blob.WriterOptions{
-		ContentType: nixstore.NARInfoMIMEType,
+		ContentType: nix.NARInfoMIMEType,
 	})
 	if err != nil {
 		log.Warnf(ctx, "Attempt to update signatures for %s: %v", localInfo.StorePath, err)
@@ -412,22 +416,20 @@ func checkUploadOverwrite(ctx context.Context, destination *blob.Bucket, narInfo
 var errStoreObjectExists = errors.New("store object already present in bucket")
 
 type hashWriter struct {
-	w   io.Writer
-	typ nixstore.HashType
-	h   hash.Hash
-	n   int64
+	w io.Writer
+	h *nix.Hasher
+	n int64
 }
 
-func newHashWriter(typ nixstore.HashType, w io.Writer) *hashWriter {
+func newHashWriter(typ nix.HashType, w io.Writer) *hashWriter {
 	return &hashWriter{
-		w:   w,
-		typ: typ,
-		h:   typ.Hash(),
+		w: w,
+		h: nix.NewHasher(typ),
 	}
 }
 
-func (w *hashWriter) sum() nixstore.Hash {
-	return nixstore.SumHash(w.typ, w.h)
+func (w *hashWriter) sum() nix.Hash {
+	return w.h.SumHash()
 }
 
 func (w *hashWriter) Write(p []byte) (n int, err error) {

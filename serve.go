@@ -40,7 +40,7 @@ import (
 	"zombiezen.com/go/bass/action"
 	"zombiezen.com/go/bass/runhttp"
 	"zombiezen.com/go/log"
-	"zombiezen.com/go/nixcached/internal/nixstore"
+	"zombiezen.com/go/nix"
 	"zombiezen.com/go/sqlite"
 	"zombiezen.com/go/sqlite/sqlitemigration"
 	"zombiezen.com/go/sqlite/sqlitex"
@@ -201,7 +201,7 @@ func (srv *bucketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if r.URL.Path == "/"+nixstore.CacheInfoName {
+	if r.URL.Path == "/"+nix.CacheInfoName {
 		index := cfg.NewHandler(srv.serveCacheInfo)
 		handlers.MethodHandler{
 			http.MethodGet:  index,
@@ -241,13 +241,13 @@ func (srv *bucketServer) serveIndex(ctx context.Context, r *http.Request) (_ *ac
 	defer sqlitex.Transaction(conn)(&err)
 
 	type expandedNARInfo struct {
-		*nixstore.NARInfo
+		*nix.NARInfo
 		ClosureFileSize int64
 		ClosureNARSize  int64
 	}
 	var data struct {
 		InitialCrawlComplete bool
-		Configuration        *nixstore.Configuration
+		CacheInfo            *nix.CacheInfo
 		Infos                []expandedNARInfo
 	}
 	err = sqlitex.Execute(conn, `select "initial_crawl_complete" from "uicache_status";`, &sqlitex.ExecOptions{
@@ -261,16 +261,16 @@ func (srv *bucketServer) serveIndex(ctx context.Context, r *http.Request) (_ *ac
 	}
 
 	if data.InitialCrawlComplete {
-		data.Configuration, _, err = readCachedConfiguration(ctx, conn)
+		data.CacheInfo, _, err = readCachedCacheInfo(ctx, conn)
 		if err != nil {
 			log.Warnf(ctx, "%v", err)
-			data.Configuration = new(nixstore.Configuration)
+			data.CacheInfo = new(nix.CacheInfo)
 		}
-		if data.Configuration.StoreDir == "" {
-			data.Configuration.StoreDir = nixstore.DefaultDirectory
+		if data.CacheInfo.StoreDirectory == "" {
+			data.CacheInfo.StoreDirectory = nix.DefaultStoreDirectory
 		}
 		// To match served version:
-		data.Configuration.WantMassQuery = true
+		data.CacheInfo.WantMassQuery = true
 
 		var buf []byte
 		err = sqlitex.Execute(conn, strings.TrimSpace(indexQuery), &sqlitex.ExecOptions{
@@ -281,9 +281,9 @@ func (srv *bucketServer) serveIndex(ctx context.Context, r *http.Request) (_ *ac
 					buf = buf[:n]
 				}
 				stmt.GetBytes("narinfo", buf)
-				info := new(nixstore.NARInfo)
+				info := new(nix.NARInfo)
 				if err := info.UnmarshalText(buf); err != nil {
-					log.Warnf(ctx, "Unable to parse %s: %v", stmt.GetText("hash")+nixstore.NARInfoExtension, buf)
+					log.Warnf(ctx, "Unable to parse %s: %v", stmt.GetText("hash")+nix.NARInfoExtension, buf)
 					return nil
 				}
 				data.Infos = append(data.Infos, expandedNARInfo{
@@ -313,7 +313,7 @@ func (srv *bucketServer) serveCacheInfo(ctx context.Context, r *http.Request) (_
 	defer srv.cache.Put(conn)
 	defer sqlitex.Transaction(conn)(&err)
 
-	cfg, _, err := readCachedConfiguration(ctx, conn)
+	cfg, _, err := readCachedCacheInfo(ctx, conn)
 	if err != nil {
 		return nil, err
 	}
@@ -326,7 +326,7 @@ func (srv *bucketServer) serveCacheInfo(ctx context.Context, r *http.Request) (_
 	return &action.Response{
 		Other: []*action.Representation{{
 			Header: http.Header{
-				"Content-Type":   {nixstore.CacheInfoMIMEType},
+				"Content-Type":   {nix.CacheInfoMIMEType},
 				"Content-Length": {strconv.Itoa(len(data))},
 			},
 			Body: io.NopCloser(bytes.NewReader(data)),

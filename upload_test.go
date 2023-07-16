@@ -23,11 +23,11 @@ import (
 	"gocloud.dev/blob"
 	"gocloud.dev/blob/memblob"
 	"zombiezen.com/go/log/testlog"
-	"zombiezen.com/go/nixcached/internal/nixstore"
+	"zombiezen.com/go/nix"
 )
 
 func TestEnsureCacheInfo(t *testing.T) {
-	const wantStoreDir nixstore.Directory = "/foo"
+	const wantStoreDir nix.StoreDirectory = "/foo"
 
 	t.Run("EmptyBucket", func(t *testing.T) {
 
@@ -39,16 +39,16 @@ func TestEnsureCacheInfo(t *testing.T) {
 			t.Error(err)
 		}
 
-		data, err := bucket.ReadAll(ctx, nixstore.CacheInfoName)
+		data, err := bucket.ReadAll(ctx, nix.CacheInfoName)
 		if err != nil {
 			t.Fatal(err)
 		}
-		cfg := new(nixstore.Configuration)
-		if err := cfg.UnmarshalText(data); err != nil {
+		info := new(nix.CacheInfo)
+		if err := info.UnmarshalText(data); err != nil {
 			t.Fatal(err)
 		}
-		if cfg.StoreDir != wantStoreDir {
-			t.Errorf("StoreDir = %q; want %q", cfg.StoreDir, wantStoreDir)
+		if info.StoreDirectory != wantStoreDir {
+			t.Errorf("StoreDirectory = %q; want %q", info.StoreDirectory, wantStoreDir)
 		}
 	})
 
@@ -58,8 +58,8 @@ func TestEnsureCacheInfo(t *testing.T) {
 		ctx := testlog.WithTB(context.Background(), t)
 		bucket := memblob.OpenBucket(nil)
 		defer bucket.Close()
-		err := bucket.WriteAll(ctx, nixstore.CacheInfoName, []byte(existingData), &blob.WriterOptions{
-			ContentType: nixstore.CacheInfoMIMEType,
+		err := bucket.WriteAll(ctx, nix.CacheInfoName, []byte(existingData), &blob.WriterOptions{
+			ContentType: nix.CacheInfoMIMEType,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -69,12 +69,12 @@ func TestEnsureCacheInfo(t *testing.T) {
 			t.Error(err)
 		}
 
-		got, err := bucket.ReadAll(ctx, nixstore.CacheInfoName)
+		got, err := bucket.ReadAll(ctx, nix.CacheInfoName)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if string(got) != existingData {
-			t.Errorf("%s = %q; want %q", nixstore.CacheInfoName, got, existingData)
+			t.Errorf("%s = %q; want %q", nix.CacheInfoName, got, existingData)
 		}
 	})
 
@@ -84,8 +84,8 @@ func TestEnsureCacheInfo(t *testing.T) {
 		ctx := testlog.WithTB(context.Background(), t)
 		bucket := memblob.OpenBucket(nil)
 		defer bucket.Close()
-		err := bucket.WriteAll(ctx, nixstore.CacheInfoName, []byte(existingData), &blob.WriterOptions{
-			ContentType: nixstore.CacheInfoMIMEType,
+		err := bucket.WriteAll(ctx, nix.CacheInfoName, []byte(existingData), &blob.WriterOptions{
+			ContentType: nix.CacheInfoMIMEType,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -97,12 +97,12 @@ func TestEnsureCacheInfo(t *testing.T) {
 			t.Log("ensureCacheInfo:", err)
 		}
 
-		got, err := bucket.ReadAll(ctx, nixstore.CacheInfoName)
+		got, err := bucket.ReadAll(ctx, nix.CacheInfoName)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if string(got) != existingData {
-			t.Errorf("%s = %q; want %q", nixstore.CacheInfoName, got, existingData)
+			t.Errorf("%s = %q; want %q", nix.CacheInfoName, got, existingData)
 		}
 	})
 }

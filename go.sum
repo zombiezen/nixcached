@@ -3268,5 +3268,7 @@ zombiezen.com/go/bass v0.0.0-20230225022050-74028357c0a4 h1:LiM3niXTNl5x4Srikq8l
 zombiezen.com/go/bass v0.0.0-20230225022050-74028357c0a4/go.mod h1:QHwUcBo15TvSHjANRUkyOo2+jTeE0OS0UkqST4+Og9k=
 zombiezen.com/go/log v1.1.0 h1:AOtu8qHcBZ8n6rC8K56oImtkqSus0lqT+e7EWD9CWoI=
 zombiezen.com/go/log v1.1.0/go.mod h1:Eos1rXF8JpgK+h6NYITdTJslqFJJA3SaIJHMU75Sqfg=
+zombiezen.com/go/nix v0.0.0-20230716050620-d760542fb2a4 h1:iBN0FAphk64G5n3NaAp8FveGYWARECH6fjJJJw2bQnM=
+zombiezen.com/go/nix v0.0.0-20230716050620-d760542fb2a4/go.mod h1:3/4h+nWUdD9F6De1g7zBvgn4RyryS+mnK5JiW2JHRe8=
 zombiezen.com/go/sqlite v0.13.0 h1:iEeyVqcm3fk5PCA8OQBhBxPnqrP4yYuVJBF+XZpSnOE=
 zombiezen.com/go/sqlite v0.13.0/go.mod h1:Ht/5Rg3Ae2hoyh1I7gbWtWAl89CNocfqeb/aAMTkJr4=

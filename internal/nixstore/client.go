@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	"golang.org/x/sys/unix"
+	"zombiezen.com/go/nix"
 )
 
 // A Client queries and manipulates a local Nix store by invoking the nix CLI.
@@ -50,7 +51,7 @@ func (c *Client) exe() string {
 // then a [NARInfo] that has StorePath populated will be in the resulting slice
 // but [NARInfo.IsValid] will return false.
 // If zero installables are given, then Query returns (nil, nil).
-func (c *Client) Query(ctx context.Context, installables ...string) ([]*NARInfo, error) {
+func (c *Client) Query(ctx context.Context, installables ...string) ([]*nix.NARInfo, error) {
 	return c.query(ctx, false, installables)
 }
 
@@ -61,11 +62,11 @@ func (c *Client) Query(ctx context.Context, installables ...string) ([]*NARInfo,
 // then a [NARInfo] that has StorePath populated will be in the resulting slice
 // but [NARInfo.IsValid] will return false.
 // If zero installables are given, then QueryRecursive returns (nil, nil).
-func (c *Client) QueryRecursive(ctx context.Context, installables ...string) ([]*NARInfo, error) {
+func (c *Client) QueryRecursive(ctx context.Context, installables ...string) ([]*nix.NARInfo, error) {
 	return c.query(ctx, true, installables)
 }
 
-func (c *Client) query(ctx context.Context, recursive bool, installables []string) ([]*NARInfo, error) {
+func (c *Client) query(ctx context.Context, recursive bool, installables []string) ([]*nix.NARInfo, error) {
 	if len(installables) == 0 {
 		return nil, nil
 	}
@@ -91,60 +92,27 @@ func (c *Client) query(ctx context.Context, recursive bool, installables []strin
 	}
 
 	var parsedOutput []struct {
-		Deriver    string
-		NARHash    Hash
+		Deriver    nix.StorePath
+		NARHash    nix.Hash
 		NARSize    int64
-		Path       string
-		References []string
-		Signatures []string
+		Path       nix.StorePath
+		References []nix.StorePath
+		Signatures []*nix.Signature
 	}
 	if err := json.Unmarshal(out.Bytes(), &parsedOutput); err != nil {
 		return nil, fmt.Errorf("query nix store paths %s: parse output: %v", strings.Join(installables, " "), err)
 	}
-	result := make([]*NARInfo, len(parsedOutput))
+	result := make([]*nix.NARInfo, len(parsedOutput))
 	for i := range parsedOutput {
 		elem := &parsedOutput[i]
-		result[i] = &NARInfo{
-			StorePath: elem.Path,
-			NARHash:   elem.NARHash,
-			NARSize:   elem.NARSize,
-			Sig:       elem.Signatures,
-		}
-		storeDir := result[i].Directory()
-
-		if elem.Deriver != "" {
-			var ok bool
-			result[i].Deriver, ok = storeDir.ParseStorePath(elem.Deriver)
-			if !ok {
-				return nil, fmt.Errorf("query nix store paths %s: invalid deriver %s for store path %s", strings.Join(installables, " "), elem.Deriver, elem.Path)
-			}
-		}
-		for _, ref := range elem.References {
-			refName, ok := storeDir.ParseStorePath(ref)
-			if !ok {
-				return nil, fmt.Errorf("query nix store paths %s: invalid reference %s for store path %s", strings.Join(installables, " "), refName, elem.Path)
-			}
-			result[i].References = append(result[i].References, refName)
+		result[i] = &nix.NARInfo{
+			StorePath:  elem.Path,
+			NARHash:    elem.NARHash,
+			NARSize:    elem.NARSize,
+			Deriver:    elem.Deriver,
+			References: elem.References,
+			Sig:        elem.Signatures,
 		}
 	}
 	return result, nil
-}
-
-// DumpPath will write a NAR file for the given installable to the given writer.
-func (c *Client) DumpPath(ctx context.Context, dst io.Writer, installable string) error {
-	cmd := exec.CommandContext(
-		ctx,
-		c.exe(), "--extra-experimental-features", "nix-command",
-		"store", "dump-path",
-		"--", installable,
-	)
-	cmd.Cancel = func() error {
-		return cmd.Process.Signal(unix.SIGTERM)
-	}
-	cmd.Stdout = dst
-	cmd.Stderr = c.Log
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("dump nar for %s: %v", installable, err)
-	}
-	return nil
 }
