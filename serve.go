@@ -202,10 +202,19 @@ func (srv *bucketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.URL.Path == "/"+nix.CacheInfoName {
-		index := cfg.NewHandler(srv.serveCacheInfo)
+		handler := cfg.NewHandler(srv.serveCacheInfo)
 		handlers.MethodHandler{
-			http.MethodGet:  index,
-			http.MethodHead: index,
+			http.MethodGet:  handler,
+			http.MethodHead: handler,
+		}.ServeHTTP(w, r)
+		return
+	}
+
+	if isNARInfoPath(r.URL.Path) {
+		handler := cfg.NewHandler(srv.serveNARInfo)
+		handlers.MethodHandler{
+			http.MethodGet:  handler,
+			http.MethodHead: handler,
 		}.ServeHTTP(w, r)
 		return
 	}
@@ -334,6 +343,80 @@ func (srv *bucketServer) serveCacheInfo(ctx context.Context, r *http.Request) (_
 	}, nil
 }
 
+func (srv *bucketServer) serveNARInfo(ctx context.Context, r *http.Request) (_ *action.Response, err error) {
+	if !isNARInfoPath(r.URL.Path) {
+		return nil, action.ErrNotFound
+	}
+	digest := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/"), nix.NARInfoExtension)
+
+	conn, err := srv.cache.Get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer srv.cache.Put(conn)
+
+	// Run single query in automatic transaction.
+	const query = `select "narinfo" from "nar_infos" where "hash" = :hash limit 1;`
+	var data []byte
+	cached := false
+	err = sqlitex.Execute(conn, query, &sqlitex.ExecOptions{
+		Named: map[string]any{
+			":hash": digest,
+		},
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			data = make([]byte, stmt.ColumnLen(0))
+			stmt.ColumnBytes(0, data)
+			cached = true
+			return nil
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if cached {
+		log.Debugf(ctx, "Serving cached data for %s", r.URL.Path)
+	} else {
+		log.Debugf(ctx, "No cached result for %s; looking up in bucket", r.URL.Path)
+		data, err = srv.bucket.ReadAll(ctx, digest+nix.NARInfoExtension)
+		if gcerrors.Code(err) == gcerrors.NotFound {
+			return nil, action.ErrNotFound
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		err = func() error {
+			endFn, err := sqlitex.ImmediateTransaction(conn)
+			if err != nil {
+				return err
+			}
+			defer endFn(&err)
+
+			info, _, err := readCachedCacheInfo(ctx, conn)
+			if err != nil {
+				return err
+			}
+			return updateNARInfoCache(ctx, conn, info.StoreDirectory, digest, data)
+		}()
+		if err != nil {
+			log.Warnf(ctx, "Failed to cache %s: %v", digest+nix.NARInfoExtension, err)
+		} else {
+			log.Debugf(ctx, "Added cache for %s", r.URL.Path)
+		}
+	}
+
+	return &action.Response{
+		Other: []*action.Representation{{
+			Header: http.Header{
+				"Content-Type":   {nix.NARInfoMIMEType},
+				"Content-Length": {strconv.Itoa(len(data))},
+			},
+			Body: io.NopCloser(bytes.NewReader(data)),
+		}},
+	}, nil
+}
+
 func (srv *bucketServer) serveContent(w http.ResponseWriter, r *http.Request) {
 	// TODO(someday): Respect request cache headers.
 	// TODO(someday): Ensure reading consistent generation on GCS.
@@ -379,6 +462,16 @@ func (srv *bucketServer) serveContent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unable to read "+key, http.StatusBadGateway)
 		return
 	}
+}
+
+func isNARInfoPath(path string) bool {
+	path = strings.TrimPrefix(path, "/")
+	digest, hasExt := strings.CutSuffix(path, nix.NARInfoExtension)
+	if !hasExt {
+		return false
+	}
+	p, err := nix.DefaultStoreDirectory.Object(digest + "-x")
+	return err == nil && p.Digest() == digest && p.Name() == "x"
 }
 
 func formatSize(v reflect.Value) (string, error) {

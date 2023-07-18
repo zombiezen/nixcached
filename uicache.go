@@ -154,19 +154,19 @@ func crawl(ctx context.Context, conn *sqlite.Conn, bucket *blob.Bucket) {
 			}
 			break
 		}
-		hash, hasExt := strings.CutSuffix(obj.Key, nix.NARInfoExtension)
+		digest, hasExt := strings.CutSuffix(obj.Key, nix.NARInfoExtension)
 		if obj.IsDir || !hasExt {
 			log.Debugf(ctx, "Ignoring %q during crawl", obj.Key)
 			continue
 		}
-		if p, err := storeDir.Object(hash + "-x"); err != nil || p.Digest() != hash || p.Name() != "x" {
+		if !isNARInfoPath(obj.Key) {
 			log.Warnf(ctx, "Ignoring improperly named %q", obj.Key)
 			continue
 		}
 
 		log.Debugf(ctx, "Found %s during crawl", obj.Key)
 		err = sqlitex.Execute(conn, `insert or ignore into "nar_infos" ("hash") values (?);`, &sqlitex.ExecOptions{
-			Args: []any{hash},
+			Args: []any{digest},
 		})
 		if err != nil {
 			log.Errorf(ctx, "Inserting %s into cache: %v", obj.Key, err)
@@ -181,7 +181,7 @@ func crawl(ctx context.Context, conn *sqlite.Conn, bucket *blob.Bucket) {
 				`from "nar_infos" where "hash" = :hash;`,
 			&sqlitex.ExecOptions{
 				Named: map[string]any{
-					":hash": hash,
+					":hash": digest,
 				},
 				ResultFunc: func(stmt *sqlite.Stmt) error {
 					cachedSize = stmt.GetInt64("narinfo_length")
@@ -203,7 +203,7 @@ func crawl(ctx context.Context, conn *sqlite.Conn, bucket *blob.Bucket) {
 			log.Errorf(ctx, "Reading %s: %v", obj.Key, err)
 			continue
 		}
-		if err := updateNARInfoCache(ctx, conn, storeDir, hash, data); err != nil {
+		if err := updateNARInfoCache(ctx, conn, storeDir, digest, data); err != nil {
 			log.Errorf(ctx, "Unable to update cache for %s: %v", obj.Key, err)
 			continue
 		}
@@ -251,6 +251,13 @@ func updateCacheInfoCache(ctx context.Context, conn *sqlite.Conn, data []byte) (
 func updateNARInfoCache(ctx context.Context, conn *sqlite.Conn, storeDir nix.StoreDirectory, hash string, data []byte) (err error) {
 	key := hash + nix.NARInfoExtension
 	defer sqlitex.Save(conn)(&err)
+
+	err = sqlitex.Execute(conn, `insert or ignore into "nar_infos" ("hash") values (?);`, &sqlitex.ExecOptions{
+		Args: []any{hash},
+	})
+	if err != nil {
+		return fmt.Errorf("update %s cache: add row: %v", key, err)
+	}
 
 	// Reset the parsed fields and set the raw data.
 	const clearQuery = `update "nar_infos" set "narinfo" = :narinfo, ` +
