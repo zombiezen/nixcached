@@ -1,0 +1,103 @@
+{{ define "title" -}}
+	{{- with .Info -}}
+    {{ .StorePath.Name }}
+  {{- else -}}
+    {{ .Path }}
+  {{- end -}}
+{{- end }}
+
+{{ define "body" -}}
+  {{- if .Info }}
+    {{- with .Info }}
+      <h1>{{ .StorePath.Base }}</h1>
+      <table class="NARInfo">
+        <tbody>
+          <tr class="NARInfo-line">
+            <th scope="row" class="NARInfo-key">StorePath:</th>
+            <td class="NARInfo-value">
+              {{- .StorePath -}}
+            </td>
+          </tr>
+          <tr class="NARInfo-line">
+            <th scope="row" class="NARInfo-key">URL:</th>
+            <td class="NARInfo-value">
+              <a href="/{{ .URL }}">{{ .URL }}</a>
+            </td>
+          </tr>
+          <tr class="NARInfo-line">
+            <th scope="row" class="NARInfo-key">Compression:</th>
+            <td class="NARInfo-value">
+              {{- .Compression -}}
+            </td>
+          </tr>
+          <tr class="NARInfo-line">
+            <th scope="row" class="NARInfo-key">FileHash:</th>
+            <td class="NARInfo-value">
+              {{- .FileHash.Base32 -}}
+            </td>
+          </tr>
+          <tr class="NARInfo-line">
+            <th scope="row" class="NARInfo-key">FileSize:</th>
+            <td class="NARInfo-value">
+              {{ .FileSize }}
+              <span class="NARInfo-sizeSummary">({{ .FileSize | size }})</span>
+            </td>
+          </tr>
+          <tr class="NARInfo-line">
+            <th scope="row" class="NARInfo-key">NarHash:</th>
+            <td class="NARInfo-value">
+              {{- .NARHash.Base32 -}}
+            </td>
+          </tr>
+          <tr class="NARInfo-line">
+            <th scope="row" class="NARInfo-key">NarSize:</th>
+            <td class="NARInfo-value">
+              {{ .NARSize }}
+              <span class="NARInfo-sizeSummary">({{ .NARSize | size }})</span>
+            </td>
+          </tr>
+          {{- with .References }}
+            <tr class="NARInfo-line">
+              <th scope="row" class="NARInfo-key">References:</th>
+              <td class="NARInfo-value">
+                {{- range . }}
+                  <a href="/{{ .Digest }}.narinfo">{{ .Base }}</a>
+                {{- end }}
+              </td>
+            </tr>
+          {{- end }}
+          {{- with .Deriver }}
+            <tr class="NARInfo-line">
+              <th scope="row" class="NARInfo-key">Deriver:</th>
+              <td class="NARInfo-value">
+                {{- .Base -}}
+              </td>
+            </tr>
+          {{- end }}
+          {{- range .Sig }}
+            <tr class="NARInfo-line">
+              <th scope="row" class="NARInfo-key">Sig:</th>
+              <td class="NARInfo-value">
+                {{- . -}}
+              </td>
+            </tr>
+          {{- end }}
+          {{- if not .CA.IsZero }}
+            <tr class="NARInfo-line">
+              <th scope="row" class="NARInfo-key">CA:</th>
+              <td class="NARInfo-value">
+                {{- .CA -}}
+              </td>
+            </tr>
+          {{- end }}
+        </tbody>
+      </table>
+    {{- end }}
+    <details class="NARInfoRaw-container">
+      <summary>Original Source</summary>
+      <pre class="NARInfoRaw"><code>{{ .Raw | printf "%s" }}</code></pre>
+    </details>
+  {{- else }}
+    <pre class="NARInfoRaw"><code>{{ .Raw | printf "%s" }}</code></pre>
+  {{- end }}
+{{- end }}

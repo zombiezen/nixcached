@@ -68,3 +68,34 @@ html, body {
 .Footer-link {
   color: rgba(0, 0, 0, 0.8);
 }
+.NARInfo {
+  --row-padding: 0.20rem;
+  margin: 1.5rem 0;
+}
+.NARInfo-key {
+  font-weight: bold;
+  padding: var(--row-padding, 0) 0.75em var(--row-padding, 0) 0;
+  text-align: left;
+  vertical-align: top;
+}
+.NARInfo-value {
+  font-family: 'Courier New', Courier, monospace;
+  line-height: 1.5;
+  padding: 0 0 var(--row-padding, 0);
+  vertical-align: top;
+}
+.NARInfo-sizeSummary {
+  font-family: Helvetica, Arial, sans-serif;
+}
+.NARInfoRaw {
+  margin: 1.5rem 0;
+  padding: 0;
+  white-space: pre-wrap;
+}
+.NARInfoRaw-container .NARInfoRaw {
+  margin: 1rem 0;
+}
+.NARInfoRaw-container {
+  margin: 1rem 0;
+  padding: 0;
+}

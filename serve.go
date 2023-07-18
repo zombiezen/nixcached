@@ -37,6 +37,7 @@ import (
 	"github.com/spf13/cobra"
 	"gocloud.dev/blob"
 	"gocloud.dev/gcerrors"
+	"zombiezen.com/go/bass/accept"
 	"zombiezen.com/go/bass/action"
 	"zombiezen.com/go/bass/runhttp"
 	"zombiezen.com/go/log"
@@ -211,6 +212,21 @@ func (srv *bucketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if isNARInfoPath(r.URL.Path) {
+		// If weight of HTML and .narinfo are equal, prefer .narinfo.
+		// This makes curl-ing easier.
+		oldAcceptString := r.Header.Get("Accept")
+		oldAccept, err := accept.ParseHeader(oldAcceptString)
+		if err != nil || oldAccept.Quality("text/html", map[string]string{"charset": "utf-8"}) == oldAccept.Quality(nix.NARInfoMIMEType, nil) {
+			r = r.Clone(ctx)
+			newAccept := accept.Header{
+				{Range: nix.NARInfoMIMEType, Quality: 1.0},
+				{Range: "*/*", Quality: 0.9},
+			}
+			newAcceptString := newAccept.String()
+			log.Debugf(ctx, "Rewriting .narinfo Accept %q -> %q", oldAcceptString, newAcceptString)
+			r.Header.Set("Accept", newAccept.String())
+		}
+
 		handler := cfg.NewHandler(srv.serveNARInfo)
 		handlers.MethodHandler{
 			http.MethodGet:  handler,
@@ -406,7 +422,20 @@ func (srv *bucketServer) serveNARInfo(ctx context.Context, r *http.Request) (_ *
 		}
 	}
 
+	var templateData struct {
+		Path string
+		Raw  []byte
+		Info *nix.NARInfo
+	}
+	templateData.Path = strings.TrimPrefix(r.URL.Path, "/")
+	templateData.Raw = data
+	templateData.Info = new(nix.NARInfo)
+	if err := templateData.Info.UnmarshalText(data); err != nil {
+		templateData.Info = nil
+	}
 	return &action.Response{
+		HTMLTemplate: "narinfo.html",
+		TemplateData: templateData,
 		Other: []*action.Representation{{
 			Header: http.Header{
 				"Content-Type":   {nix.NARInfoMIMEType},
