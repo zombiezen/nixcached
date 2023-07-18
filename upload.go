@@ -345,10 +345,19 @@ func uploadStorePath(ctx context.Context, storeClient *nixstore.Client, destinat
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("upload %s: %v", info.StorePath, err)
 	}
+
+	// The most technically correct thing here would be to
+	// always set Content-Type to application/x-nix-nar
+	// and set Content-Encoding to the compression algorithm used.
+	// However, if we do this AND set NARInfo.Compression to anything other than none,
+	// then Nix will attempt to double-decompress and fail.
+	// Only gzip and Brotli are supported by Content-Encoding,
+	// so for wider compatibility and keeping the information in the .narinfo file,
+	// we just set Content-Type.
+	// (Nix ignores the Content-Type.)
 	err = destination.Upload(ctx, info.URL, f, &blob.WriterOptions{
-		ContentType:     nar.MIMEType,
-		ContentEncoding: "bzip2",
-		ContentMD5:      md5Hash.Bytes(nil),
+		ContentType: compressionMIMEType(nar.MIMEType, writtenInfo.Compression),
+		ContentMD5:  md5Hash.Bytes(nil),
 	})
 	if err != nil {
 		return fmt.Errorf("upload %s: %v", info.StorePath, err)
@@ -484,6 +493,23 @@ func checkUploadOverwrite(ctx context.Context, destination *blob.Bucket, narInfo
 }
 
 var errStoreObjectExists = errors.New("store object already present in bucket")
+
+func compressionMIMEType(underlying string, ct nix.CompressionType) string {
+	switch ct {
+	case "", nix.NoCompression:
+		return underlying
+	case nix.Gzip:
+		return "application/gzip"
+	case nix.Bzip2:
+		return "application/x-bzip2"
+	case nix.XZ:
+		return "application/x-xz"
+	case nix.Zstandard:
+		return "application/zstd"
+	default:
+		return "application/octet-stream"
+	}
+}
 
 type hashWriter struct {
 	w io.Writer
