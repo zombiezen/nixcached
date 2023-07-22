@@ -12,6 +12,12 @@
   </figure>
 
   <h2>Objects</h2>
+  {{- if not .InitialCrawlComplete }}
+    <div class="DiscoveryWarning">
+      Object list has not finished downloading.
+      Refresh for more results.
+    </div>
+  {{- end }}
   {{- with .Infos }}
     <table class="Listing">
       <thead>

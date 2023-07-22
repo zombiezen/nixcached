@@ -30,6 +30,11 @@ html, body {
   text-align: right;
   width: auto;
 }
+.DiscoveryWarning {
+  font-style: italic;
+  margin: 1rem 0;
+  padding: 0;
+}
 .Listing {
   --row-padding: 0.25rem;
 }

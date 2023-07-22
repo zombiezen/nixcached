@@ -29,10 +29,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"reflect"
-	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/handlers"
@@ -44,6 +45,8 @@ import (
 	"zombiezen.com/go/nix"
 	"zombiezen.com/go/nix/nar"
 	"zombiezen.com/go/nixcached/internal/nixstore"
+	"zombiezen.com/go/sqlite"
+	"zombiezen.com/go/sqlite/sqlitemigration"
 )
 
 func newServeCommand(g *globalConfig) *cobra.Command {
@@ -58,19 +61,19 @@ func newServeCommand(g *globalConfig) *cobra.Command {
 	host := c.Flags().String("host", "localhost", "`interface` to listen on")
 	port := c.Flags().Uint16P("port", "p", 8080, "`port` to listen on")
 	resources := c.Flags().String("resources", "", "`path` to resource files (defaults to using embedded files)")
-	crawlFrequency := c.Flags().Duration("crawl-frequency", 30*time.Second, "minimum `duration` of time between starting crawls")
+	maxListFrequency := c.Flags().Duration("max-list-frequency", 2*time.Minute, "minimum `duration` of time between starting listings")
 	c.RunE = func(cmd *cobra.Command, args []string) error {
 		listenAddr := net.JoinHostPort(*host, strconv.Itoa(int(*port)))
 		resourcesFS := fs.FS(embeddedResources)
 		if *resources != "" {
 			resourcesFS = os.DirFS(*resources)
 		}
-		return runServe(cmd.Context(), g, listenAddr, resourcesFS, args[0], *crawlFrequency)
+		return runServe(cmd.Context(), g, listenAddr, resourcesFS, args[0], *maxListFrequency)
 	}
 	return c
 }
 
-func runServe(ctx context.Context, g *globalConfig, listenAddr string, resources fs.FS, src string, crawlFrequency time.Duration) error {
+func runServe(ctx context.Context, g *globalConfig, listenAddr string, resources fs.FS, src string, maxListFrequency time.Duration) error {
 	tempDir, err := os.MkdirTemp("", "nixcached-serve-*")
 	if err != nil {
 		return err
@@ -81,6 +84,22 @@ func runServe(ctx context.Context, g *globalConfig, listenAddr string, resources
 		if err := os.RemoveAll(tempDir); err != nil {
 			log.Warnf(ctx, "Clean up: %v", err)
 		}
+	}()
+	cachePool := sqlitemigration.NewPool(filepath.Join(tempDir, "cache.db"), uiCacheSchema(), sqlitemigration.Options{
+		OnStartMigrate: func() {
+			log.Debugf(ctx, "Cache database migration starting...")
+		},
+		OnReady: func() {
+			log.Debugf(ctx, "Cache database ready")
+		},
+		OnError: func(err error) {
+			log.Errorf(ctx, "Cache setup: %v", err)
+		},
+		PrepareConn: prepareUICacheConn,
+	})
+	defer func() {
+		log.Debugf(ctx, "Waiting for cache connections to finish...")
+		cachePool.Close()
 	}()
 
 	var store nixstore.Store
@@ -103,19 +122,34 @@ func runServe(ctx context.Context, g *globalConfig, listenAddr string, resources
 		store = bstore
 	}
 
-	srv := &http.Server{
-		Addr: listenAddr,
-		Handler: &storeServer{
-			store:     store,
-			resources: resources,
-		},
+	srv := &storeServer{
+		uncachedStore:    store,
+		cache:            cachePool,
+		resources:        resources,
+		maxListFrequency: maxListFrequency,
+	}
+	defer func() {
+		srv.mu.Lock()
+		if srv.cancelDiscovery == nil {
+			srv.mu.Unlock()
+			return
+		}
+		log.Debugf(ctx, "Waiting for discovery to complete...")
+		srv.cancelDiscovery()
+		done := srv.discoveryDone
+		srv.mu.Unlock()
+		<-done
+	}()
+	hsrv := &http.Server{
+		Addr:              listenAddr,
+		Handler:           srv,
 		ReadHeaderTimeout: 30 * time.Second,
 		IdleTimeout:       30 * time.Second,
 		BaseContext: func(l net.Listener) context.Context {
 			return ctx
 		},
 	}
-	return runhttp.Serve(ctx, srv, &runhttp.Options{
+	return runhttp.Serve(ctx, hsrv, &runhttp.Options{
 		OnStartup: func(ctx context.Context, laddr net.Addr) {
 			if tcpAddr, ok := laddr.(*net.TCPAddr); ok && tcpAddr.IP.IsLoopback() {
 				log.Infof(ctx, "Listening on http://localhost:%d/", tcpAddr.Port)
@@ -137,8 +171,15 @@ func runServe(ctx context.Context, g *globalConfig, listenAddr string, resources
 var embeddedResources embed.FS
 
 type storeServer struct {
-	store     nixstore.Store
-	resources fs.FS
+	uncachedStore    nixstore.Store
+	cache            *sqlitemigration.Pool
+	resources        fs.FS
+	maxListFrequency time.Duration
+
+	mu               sync.Mutex
+	lastDiscoveryEnd time.Time
+	cancelDiscovery  context.CancelFunc
+	discoveryDone    chan struct{}
 }
 
 func (srv *storeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -226,55 +267,41 @@ func (srv *storeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (srv *storeServer) serveIndex(ctx context.Context, r *http.Request) (*action.Response, error) {
-	type expandedNARInfo struct {
-		*nix.NARInfo
-		ClosureFileSize int64
-		ClosureNARSize  int64
-	}
 	var data struct {
 		InitialCrawlComplete bool
 		CacheInfo            *nix.CacheInfo
 		Infos                []expandedNARInfo
 	}
 
-	var err error
-	data.CacheInfo, err = srv.store.CacheInfo(ctx)
+	conn, err := srv.cache.Get(ctx)
 	if err != nil {
 		return nil, err
 	}
-	iter := srv.store.List(ctx)
-	for {
-		digest, err := iter.NextDigest(ctx)
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		info, _, err := srv.store.NARInfo(ctx, digest)
-		if err != nil {
-			log.Warnf(ctx, "%v", err)
-			continue
-		}
-		info.URL, err = buildNARURL(digest, info.Compression)
-		if err != nil {
-			log.Warnf(ctx, "%v", err)
-			continue
-		}
-		data.Infos = append(data.Infos, expandedNARInfo{
-			NARInfo:         info,
-			ClosureFileSize: info.FileSize,
-			ClosureNARSize:  info.NARSize,
-		})
+	defer srv.cache.Put(conn)
+	store := uiCacheConn{
+		conn:  conn,
+		store: srv.uncachedStore,
 	}
-	sort.Slice(data.Infos, func(i, j int) bool {
-		nameI := data.Infos[i].StorePath.Name()
-		nameJ := data.Infos[j].StorePath.Name()
-		if nameI != nameJ {
-			return nameI < nameJ
+
+	data.CacheInfo, err = store.CacheInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	data.InitialCrawlComplete = srv.signalDiscovery(ctx, nil)
+	data.Infos, err = store.cachedList(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range data.Infos {
+		info := &data.Infos[i]
+		newURL, err := buildNARURL(info.StorePath.Digest(), info.Compression)
+		if err != nil {
+			log.Warnf(ctx, "%v", err)
+			continue
 		}
-		return data.Infos[i].StorePath.Digest() < data.Infos[j].StorePath.Digest()
-	})
+		info.URL = newURL
+	}
 
 	return &action.Response{
 		HTMLTemplate: "index.html",
@@ -282,8 +309,69 @@ func (srv *storeServer) serveIndex(ctx context.Context, r *http.Request) (*actio
 	}, nil
 }
 
+func (srv *storeServer) signalDiscovery(ctx context.Context, conn *sqlite.Conn) (hasDiscovered bool) {
+	srv.mu.Lock()
+	hasDiscovered = !srv.lastDiscoveryEnd.IsZero()
+	if srv.cancelDiscovery != nil ||
+		(hasDiscovered && time.Now().Before(srv.lastDiscoveryEnd.Add(srv.maxListFrequency))) {
+		// Discovery already in progress or rate-limited.
+		srv.mu.Unlock()
+		return hasDiscovered
+	}
+	if conn == nil {
+		// Don't hold onto the lock and wait to obtain a connection to hold in the background.
+		srv.mu.Unlock()
+		conn, err := srv.cache.Get(ctx)
+		if err != nil {
+			return hasDiscovered
+		}
+		return srv.signalDiscovery(ctx, conn)
+	}
+
+	done := make(chan struct{})
+	var discoveryCtx context.Context
+	discoveryCtx, srv.cancelDiscovery = context.WithCancel(context.Background())
+	srv.discoveryDone = done
+	srv.mu.Unlock()
+
+	conn.SetInterrupt(discoveryCtx.Done())
+	startTime := time.Now()
+	log.Infof(ctx, "Starting discovery task...")
+	go func() {
+		defer srv.cache.Put(conn)
+
+		store := uiCacheConn{
+			conn:  conn,
+			store: srv.uncachedStore,
+		}
+		n := store.discover(discoveryCtx)
+
+		endTime := time.Now()
+
+		srv.mu.Lock()
+		defer srv.mu.Unlock()
+		srv.lastDiscoveryEnd = endTime
+		srv.cancelDiscovery = nil
+		srv.discoveryDone = nil
+		close(done)
+
+		log.Infof(discoveryCtx, "Discovery task ended after %v and found %d objects", endTime.Sub(startTime), n)
+	}()
+	return hasDiscovered
+}
+
 func (srv *storeServer) serveCacheInfo(ctx context.Context, r *http.Request) (_ *action.Response, err error) {
-	info, err := srv.store.CacheInfo(ctx)
+	conn, err := srv.cache.Get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer srv.cache.Put(conn)
+	store := uiCacheConn{
+		conn:  conn,
+		store: srv.uncachedStore,
+	}
+
+	info, err := store.CacheInfo(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -303,11 +391,21 @@ func (srv *storeServer) serveCacheInfo(ctx context.Context, r *http.Request) (_ 
 }
 
 func (srv *storeServer) serveNARInfo(ctx context.Context, r *http.Request) (*action.Response, error) {
+	conn, err := srv.cache.Get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer srv.cache.Put(conn)
+	store := uiCacheConn{
+		conn:  conn,
+		store: srv.uncachedStore,
+	}
+
 	if !isNARInfoPath(r.URL.Path) {
 		return nil, action.ErrNotFound
 	}
 	digest := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/"), nix.NARInfoExtension)
-	info, _, err := srv.store.NARInfo(ctx, digest)
+	info, _, err := store.NARInfo(ctx, digest)
 	if errors.Is(err, nixstore.ErrNotFound) {
 		return nil, action.ErrNotFound
 	}
@@ -339,12 +437,24 @@ func (srv *storeServer) serveNAR(w http.ResponseWriter, r *http.Request) {
 	// TODO(someday): Respect request cache headers.
 
 	ctx := r.Context()
+	conn, err := srv.cache.Get(ctx)
+	if err != nil {
+		log.Errorf(ctx, "%v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	defer srv.cache.Put(conn)
+	store := uiCacheConn{
+		conn:  conn,
+		store: srv.uncachedStore,
+	}
+
 	digest, compression, ok := parseNARURLPath(r.URL.Path)
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	info, infoURL, err := srv.store.NARInfo(ctx, digest)
+	info, infoURL, err := store.NARInfo(ctx, digest)
 	if errors.Is(err, nixstore.ErrNotFound) || (err == nil && info.Compression != compression) {
 		http.NotFound(w, r)
 		return
@@ -354,13 +464,15 @@ func (srv *storeServer) serveNAR(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
-	ref, err := url.Parse(info.URL)
+	downloadURL, err := url.Parse(info.URL)
 	if err != nil {
 		log.Errorf(ctx, "%v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
-	downloadURL := infoURL.ResolveReference(ref)
+	if infoURL != nil {
+		downloadURL = infoURL.ResolveReference(downloadURL)
+	}
 	w.Header().Set("Content-Length", strconv.FormatInt(info.FileSize, 10))
 	w.Header().Set("Content-Type", compressionMIMEType(nar.MIMEType, compression))
 	w.Header().Set("ETag", `"`+info.FileHash.SRI()+`"`)
@@ -368,7 +480,7 @@ func (srv *storeServer) serveNAR(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodHead {
 		return
 	}
-	err = srv.store.Download(ctx, w, downloadURL)
+	err = store.Download(ctx, w, downloadURL)
 	if errors.Is(err, nixstore.ErrNotFound) {
 		w.Header().Del("Content-Length")
 		w.Header().Del("Content-Type")
