@@ -104,23 +104,28 @@ func (b *Bucket) List(ctx context.Context) ListIterator {
 }
 
 // NARInfo reads the ".narinfo" file with the given digest at the root of the bucket.
-func (b *Bucket) NARInfo(ctx context.Context, storePathDigest string) (*nix.NARInfo, *url.URL, error) {
+func (b *Bucket) NARInfo(ctx context.Context, storePathDigest string) (*nix.NARInfo, error) {
 	if err := validateDigest(storePathDigest); err != nil {
-		return nil, nil, fmt.Errorf("read nar info for %s: %w", storePathDigest, err)
+		return nil, fmt.Errorf("read nar info for %s: %w", storePathDigest, err)
 	}
 	key := storePathDigest + nix.NARInfoExtension
 	data, err := b.bucket.ReadAll(ctx, key)
 	if gcerrors.Code(err) == gcerrors.NotFound {
-		return nil, nil, fmt.Errorf("read nar info for %s: %w", storePathDigest, ErrNotFound)
+		return nil, fmt.Errorf("read nar info for %s: %w", storePathDigest, ErrNotFound)
 	}
 	if err != nil {
-		return nil, nil, fmt.Errorf("read nar info for %s: %v", storePathDigest, err)
+		return nil, fmt.Errorf("read nar info for %s: %v", storePathDigest, err)
 	}
 	info := new(nix.NARInfo)
 	if err := info.UnmarshalText(data); err != nil {
-		return nil, nil, fmt.Errorf("read nar info for %s: %v", storePathDigest, err)
+		return nil, fmt.Errorf("read nar info for %s: %v", storePathDigest, err)
 	}
-	return info, b.url.JoinPath(key), nil
+	u, err := url.Parse(info.URL)
+	if err != nil {
+		return nil, fmt.Errorf("read nar info for %s: %v", storePathDigest, err)
+	}
+	info.URL = b.url.JoinPath(key).ResolveReference(u).String()
+	return info, nil
 }
 
 // Download copies the named blob from the bucket.

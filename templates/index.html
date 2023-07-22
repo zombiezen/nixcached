@@ -16,6 +16,7 @@
     <div class="DiscoveryWarning">
       Object list has not finished downloading.
       Refresh for more results.
+      {{ .Infos | len }}
     </div>
   {{- end }}
   {{- with .Infos }}

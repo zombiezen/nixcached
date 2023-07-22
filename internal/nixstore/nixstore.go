@@ -33,16 +33,43 @@ type Store interface {
 	CacheInfo(ctx context.Context) (*nix.CacheInfo, error)
 	// List returns an iterator over the store's object names.
 	List(ctx context.Context) ListIterator
-	// NARInfo returns the metadata about the store object with the given digest
-	// and the base URL for resolving the NAR info's URL.
+	// NARInfo returns the metadata about the store object with the given digest.
+	// The returned URL should be absolute.
 	// If there is no such object, then NARInfo returns an error
 	// for which errors.Is(err, ErrNotFound) reports true.
-	NARInfo(ctx context.Context, storePathDigest string) (*nix.NARInfo, *url.URL, error)
+	NARInfo(ctx context.Context, storePathDigest string) (*nix.NARInfo, error)
 	// Download downloads the NAR file at the given URL,
 	// which may be compressed depending on the NARInfo.
 	// If there is no such resource, then NARInfo returns an error
 	// for which errors.Is(err, ErrNotFound) reports true.
 	Download(ctx context.Context, w io.Writer, u *url.URL) error
+}
+
+type BatchNARInfoStore interface {
+	Store
+
+	BatchNARInfo(ctx context.Context, storePathDigests []string) ([]*nix.NARInfo, error)
+}
+
+func BatchNARInfo(ctx context.Context, store Store, storePathDigests []string) ([]*nix.NARInfo, error) {
+	if len(storePathDigests) == 0 {
+		return nil, nil
+	}
+	if b, ok := store.(BatchNARInfoStore); ok {
+		return b.BatchNARInfo(ctx, storePathDigests)
+	}
+	result := make([]*nix.NARInfo, 0, len(storePathDigests))
+	for _, digest := range storePathDigests {
+		info, err := store.NARInfo(ctx, digest)
+		if errors.Is(err, ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return result, err
+		}
+		result = append(result, info)
+	}
+	return result, nil
 }
 
 // ErrNotFound is the error returned by various [Store] methods

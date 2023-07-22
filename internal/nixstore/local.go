@@ -26,6 +26,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 
 	"golang.org/x/sys/unix"
@@ -33,7 +34,12 @@ import (
 	"zombiezen.com/go/nix/nar"
 )
 
-var _ Store = (*Local)(nil)
+var _ interface {
+	Store
+	BatchNARInfoStore
+} = (*Local)(nil)
+
+const localDirListSize = 1000
 
 // Local queries a local Nix store by invoking the Nix CLI.
 type Local struct {
@@ -81,29 +87,109 @@ func (l *Local) List(ctx context.Context) ListIterator {
 
 // NARInfo invokes the Nix CLI to return information
 // about the store object with the given digest.
-func (l *Local) NARInfo(ctx context.Context, storePathDigest string) (*nix.NARInfo, *url.URL, error) {
+func (l *Local) NARInfo(ctx context.Context, storePathDigest string) (*nix.NARInfo, error) {
 	if err := validateDigest(storePathDigest); err != nil {
-		return nil, nil, fmt.Errorf("read nar info for %s: %w", storePathDigest, err)
+		return nil, fmt.Errorf("read nar info for %s: %w", storePathDigest, err)
 	}
 	storePath, err := l.queryPathFromHashPart(ctx, storePathDigest)
 	if err != nil {
-		return nil, nil, fmt.Errorf("read nar info for %s: %w", storePathDigest, ErrNotFound)
+		return nil, fmt.Errorf("read nar info for %s: %w", storePathDigest, ErrNotFound)
 	}
 	infos, err := l.pathInfo(ctx, storePath.IsDerivation(), false, []string{string(storePath)})
 	if err != nil {
-		return nil, nil, fmt.Errorf("read nar info for %s: %v", storePathDigest, err)
+		return nil, fmt.Errorf("read nar info for %s: %v", storePathDigest, err)
 	}
 	if len(infos) > 1 {
-		return nil, nil, fmt.Errorf("read nar info for %s: multiple results for %s", storePathDigest, storePath)
+		return nil, fmt.Errorf("read nar info for %s: multiple results for %s", storePathDigest, storePath)
 	}
 	if len(infos) == 0 || infos[0].NARHash.IsZero() {
-		return nil, nil, fmt.Errorf("read nar info for %s: %w", storePathDigest, ErrNotFound)
+		return nil, fmt.Errorf("read nar info for %s: %w", storePathDigest, ErrNotFound)
 	}
-	infos[0].URL = storePath.Base()
-	return infos[0], &url.URL{
+	infos[0].URL = (&url.URL{
 		Scheme: "file",
 		Path:   string(storePath),
-	}, nil
+	}).String()
+	return infos[0], nil
+}
+
+func (l *Local) BatchNARInfo(ctx context.Context, storePathDigests []string) ([]*nix.NARInfo, error) {
+	storeDir := l.dir()
+	entries, err := os.ReadDir(string(storeDir))
+	if err != nil {
+		return nil, fmt.Errorf("read nar info: %v", err)
+	}
+
+	outputs := make([]string, 0, len(storePathDigests))
+	derivations := make([]string, 0, len(storePathDigests))
+	for _, digest := range storePathDigests {
+		i := sort.Search(len(entries), func(i int) bool { return entries[i].Name() >= digest })
+		p, err := storeDir.Object(entries[i].Name())
+		if err != nil || p.Digest() != digest {
+			// TODO(now): Advance through more entries?
+			continue
+		}
+		if p.IsDerivation() {
+			derivations = append(derivations, string(p))
+		} else {
+			outputs = append(outputs, string(p))
+		}
+	}
+
+	result := make([]*nix.NARInfo, 0, len(storePathDigests))
+	outputInfos, err := l.pathInfo(ctx, false, false, outputs)
+	if err != nil {
+		return nil, fmt.Errorf("read nar info: %v", err)
+	}
+	for _, info := range outputInfos {
+		if info.NARHash.IsZero() {
+			continue
+		}
+		info.URL = (&url.URL{
+			Scheme: "file",
+			Path:   string(info.StorePath),
+		}).String()
+		result = append(result, info)
+	}
+	derivationInfos, err := l.pathInfo(ctx, true, false, derivations)
+	if err != nil {
+		return nil, fmt.Errorf("read nar info: %v", err)
+	}
+	for _, info := range derivationInfos {
+		if info.NARHash.IsZero() {
+			continue
+		}
+		info.URL = (&url.URL{
+			Scheme: "file",
+			Path:   string(info.StorePath),
+		}).String()
+		result = append(result, info)
+	}
+	return result, nil
+}
+
+func (l *Local) queryPathFromHashPart(ctx context.Context, storePathDigest string) (nix.StorePath, error) {
+	storeDir := l.dir()
+	dir, err := os.Open(string(storeDir))
+	if err != nil {
+		return "", fmt.Errorf("query nix store path from hash part %q: %v", storePathDigest, err)
+	}
+	defer dir.Close()
+
+	for {
+		entries, err := dir.ReadDir(localDirListSize)
+		if err != nil {
+			if err == io.EOF {
+				return "", fmt.Errorf("query nix store path from hash part %q: %w", storePathDigest, ErrNotFound)
+			}
+			return "", fmt.Errorf("query nix store path from hash part %q: %v", storePathDigest, err)
+		}
+		for _, ent := range entries {
+			p, err := storeDir.Object(ent.Name())
+			if err == nil && p.Digest() == storePathDigest {
+				return p, nil
+			}
+		}
+	}
 }
 
 // Download dumps the store object as an uncompressed NAR archive.
@@ -133,28 +219,6 @@ func (l *Local) Query(ctx context.Context, installables ...string) ([]*nix.NARIn
 // If zero installables are given, then QueryRecursive returns (nil, nil).
 func (l *Local) QueryRecursive(ctx context.Context, installables ...string) ([]*nix.NARInfo, error) {
 	return l.pathInfo(ctx, false, true, installables)
-}
-
-func (l *Local) queryPathFromHashPart(ctx context.Context, storePathDigest string) (nix.StorePath, error) {
-	cmd := exec.CommandContext(ctx,
-		l.exe(), "--extra-experimental-features", "nix-command",
-		"store", "path-from-hash-part", "--", storePathDigest,
-	)
-	cmd.Env = append(os.Environ(), "NIX_STORE_DIR="+string(l.dir()))
-	cmd.Cancel = func() error {
-		return cmd.Process.Signal(unix.SIGTERM)
-	}
-	cmd.Stderr = l.Log
-	output, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("query nix store path from hash part %q: %v", storePathDigest, err)
-	}
-	output = bytes.TrimSuffix(output, []byte("\n"))
-	storePath, err := nix.ParseStorePath(string(output))
-	if err != nil {
-		return "", fmt.Errorf("query nix store path from hash part %q: %v", storePathDigest, err)
-	}
-	return storePath, nil
 }
 
 func (l *Local) pathInfo(ctx context.Context, derivation bool, recursive bool, installables []string) ([]*nix.NARInfo, error) {
@@ -241,7 +305,7 @@ func (iter *localListIterator) NextDigest(ctx context.Context) (string, error) {
 				return "", err
 			}
 			var err error
-			iter.buf, err = iter.dir.ReadDir(1000)
+			iter.buf, err = iter.dir.ReadDir(localDirListSize)
 			if err != nil {
 				return "", err
 			}

@@ -405,7 +405,7 @@ func (srv *storeServer) serveNARInfo(ctx context.Context, r *http.Request) (*act
 		return nil, action.ErrNotFound
 	}
 	digest := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/"), nix.NARInfoExtension)
-	info, _, err := store.NARInfo(ctx, digest)
+	info, err := store.NARInfo(ctx, digest)
 	if errors.Is(err, nixstore.ErrNotFound) {
 		return nil, action.ErrNotFound
 	}
@@ -454,7 +454,7 @@ func (srv *storeServer) serveNAR(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	info, infoURL, err := store.NARInfo(ctx, digest)
+	info, err := store.NARInfo(ctx, digest)
 	if errors.Is(err, nixstore.ErrNotFound) || (err == nil && info.Compression != compression) {
 		http.NotFound(w, r)
 		return
@@ -469,9 +469,6 @@ func (srv *storeServer) serveNAR(w http.ResponseWriter, r *http.Request) {
 		log.Errorf(ctx, "%v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
-	}
-	if infoURL != nil {
-		downloadURL = infoURL.ResolveReference(downloadURL)
 	}
 	w.Header().Set("Content-Length", strconv.FormatInt(info.FileSize, 10))
 	w.Header().Set("Content-Type", compressionMIMEType(nar.MIMEType, compression))
@@ -505,6 +502,7 @@ var compressionExtensions = map[nix.CompressionType]string{
 	nix.Bzip2:         ".bz2",
 	nix.Gzip:          ".gz",
 	nix.Brotli:        ".br",
+	nix.XZ:            ".xz",
 }
 
 func parseNARURLPath(path string) (digest string, compression nix.CompressionType, ok bool) {
