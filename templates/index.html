@@ -3,64 +3,59 @@
 {{- end }}
 
 {{ define "body" -}}
-  {{- if not .InitialCrawlComplete }}
-    <h1>Hang tight</h1>
-    <p>Loading contents, please wait&hellip;</p>
-  {{- else }}
-    <h1>{{ .CacheInfo.StoreDirectory }}</h1>
-    <figure class="CacheInfo">
-      <pre class="CacheInfo-codeBlock"><code class="CacheInfo-code">
-        {{- .CacheInfo.MarshalText | printf "%s" -}}
-      </code></pre>
-      <figcaption class="CacheInfo-caption">from <a href="/nix-cache-info">nix-cache-info</a></figcaption>
-    </figure>
+  <h1>{{ .CacheInfo.StoreDirectory }}</h1>
+  <figure class="CacheInfo">
+    <pre class="CacheInfo-codeBlock"><code class="CacheInfo-code">
+      {{- .CacheInfo.MarshalText | printf "%s" -}}
+    </code></pre>
+    <figcaption class="CacheInfo-caption">from <a href="/nix-cache-info">nix-cache-info</a></figcaption>
+  </figure>
 
-    <h2>Objects</h2>
-    {{- with .Infos }}
-      <table class="Listing">
-        <thead>
-          <th scope="col" class="Listing-heading">Name</th>
-          <th scope="col" class="Listing-heading">Hash</th>
-          <th scope="col" colspan="2" class="Listing-heading Listing-heading--size">Size</th>
-          <th scope="col" colspan="2" class="Listing-heading Listing-heading--size">Compressed Size</th>
-        </thead>
-        <tbody>
-          {{- range . }}
-            <tr>
-              <th scope="row" class="Listing-objectName">
-                {{- .StorePath.Name -}}
-              </th>
-              <td class="Listing-objectHash">
-                <a href="{{ .StorePath.Digest }}.narinfo">{{ .StorePath.Digest }}</a>
+  <h2>Objects</h2>
+  {{- with .Infos }}
+    <table class="Listing">
+      <thead>
+        <th scope="col" class="Listing-heading">Name</th>
+        <th scope="col" class="Listing-heading">Hash</th>
+        <th scope="col" colspan="2" class="Listing-heading Listing-heading--size">Size</th>
+        <th scope="col" colspan="2" class="Listing-heading Listing-heading--size">Compressed Size</th>
+      </thead>
+      <tbody>
+        {{- range . }}
+          <tr>
+            <th scope="row" class="Listing-objectName">
+              {{- .StorePath.Name -}}
+            </th>
+            <td class="Listing-objectHash">
+              <a href="{{ .StorePath.Digest }}.narinfo">{{ .StorePath.Digest }}</a>
+            </td>
+            {{- if eq .NARSize .ClosureNARSize }}
+              <td class="Listing-objectSize" colspan="2">
+                {{- .NARSize | size }}
               </td>
-              {{- if eq .NARSize .ClosureNARSize }}
-                <td class="Listing-objectSize" colspan="2">
-                  {{- .NARSize | size }}
-                </td>
-              {{- else }}
-                <td class="Listing-objectSize">
-                  {{- .NARSize | size -}}
-                </td>
-                <td class="Listing-objectSize">
-                  {{- .ClosureNARSize | size -}}
-                </td>
-              {{- end }}
-              {{- if eq .FileSize .ClosureFileSize }}
-                <td class="Listing-objectSize" colspan="2">
-                  {{- .FileSize | size -}}
-                </td>
-              {{- else }}
-                <td class="Listing-objectSize">
-                  {{- .FileSize | size -}}
-                </td>
-                <td class="Listing-objectSize">
-                  {{- .ClosureFileSize | size -}}
-                </td>
-              {{- end }}
-            </tr>
-          {{- end }}
-        </tbody>
-      </table>
-    {{- end }}
+            {{- else }}
+              <td class="Listing-objectSize">
+                {{- .NARSize | size -}}
+              </td>
+              <td class="Listing-objectSize">
+                {{- .ClosureNARSize | size -}}
+              </td>
+            {{- end }}
+            {{- if eq .FileSize .ClosureFileSize }}
+              <td class="Listing-objectSize" colspan="2">
+                {{- .FileSize | size -}}
+              </td>
+            {{- else }}
+              <td class="Listing-objectSize">
+                {{- .FileSize | size -}}
+              </td>
+              <td class="Listing-objectSize">
+                {{- .ClosureFileSize | size -}}
+              </td>
+            {{- end }}
+          </tr>
+        {{- end }}
+      </tbody>
+    </table>
   {{- end }}
 {{- end }}

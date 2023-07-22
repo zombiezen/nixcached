@@ -51,7 +51,7 @@ func newUploadCommand(g *globalConfig) *cobra.Command {
 	c.Flags().BoolVar(&opts.createListings, "write-nar-listing", true, "whether to write a JSON file that lists the files in each NAR")
 	c.RunE = func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-		storeDir, err := nix.StoreDirectoryFromEnv()
+		storeDir, err := nix.StoreDirectoryFromEnvironment()
 		if err != nil {
 			return err
 		}
@@ -95,7 +95,7 @@ func runUpload(ctx context.Context, g *globalConfig, destinationBucketURL string
 		return err
 	}
 
-	storeClient := &nixstore.Client{
+	storeClient := &nixstore.Local{
 		Log: os.Stderr,
 	}
 	processDone := make(chan struct{})
@@ -196,7 +196,7 @@ func ensureCacheInfo(ctx context.Context, bucket *blob.Bucket, localStoreDir nix
 
 // processUploads performs the uploads requested from a channel of store paths.
 // It is assumed that the store paths have been validated before being sent on the channel.
-func processUploads(ctx context.Context, storeClient *nixstore.Client, destination *blob.Bucket, opts *uploadOptions, storePaths <-chan nix.StorePath) {
+func processUploads(ctx context.Context, storeClient *nixstore.Local, destination *blob.Bucket, opts *uploadOptions, storePaths <-chan nix.StorePath) {
 	storePathBatch := make([]nix.StorePath, 0, 100)
 
 	for {
@@ -247,7 +247,7 @@ func processUploads(ctx context.Context, storeClient *nixstore.Client, destinati
 // starting at the given store paths.
 // Upon encountering an error, gatherStorePathSet will log the error
 // and attempt to gather as much information about other store paths as possible.
-func gatherStorePathSet(ctx context.Context, storeClient *nixstore.Client, storePaths []nix.StorePath) []*nix.NARInfo {
+func gatherStorePathSet(ctx context.Context, storeClient *nixstore.Local, storePaths []nix.StorePath) []*nix.NARInfo {
 	// First: attempt to batch up all store paths.
 	queryArgs := make([]string, len(storePaths))
 	for i, p := range storePaths {
@@ -278,7 +278,7 @@ func gatherStorePathSet(ctx context.Context, storeClient *nixstore.Client, store
 				continue
 			}
 			visited[info.StorePath] = struct{}{}
-			if info.IsValid() {
+			if !info.NARHash.IsZero() {
 				result = append(result, info)
 			}
 		}
@@ -286,7 +286,7 @@ func gatherStorePathSet(ctx context.Context, storeClient *nixstore.Client, store
 	return result
 }
 
-func uploadStorePath(ctx context.Context, storeClient *nixstore.Client, destination *blob.Bucket, info *nix.NARInfo, opts *uploadOptions) (err error) {
+func uploadStorePath(ctx context.Context, storeClient *nixstore.Local, destination *blob.Bucket, info *nix.NARInfo, opts *uploadOptions) (err error) {
 	defer func() {
 		if err != nil {
 			err = fmt.Errorf("upload %s: %v", info.StorePath, err)

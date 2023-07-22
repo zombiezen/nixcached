@@ -20,31 +20,30 @@ import (
 	"bytes"
 	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
-	"path/filepath"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gorilla/handlers"
 	"github.com/spf13/cobra"
-	"gocloud.dev/blob"
-	"gocloud.dev/gcerrors"
 	"zombiezen.com/go/bass/accept"
 	"zombiezen.com/go/bass/action"
 	"zombiezen.com/go/bass/runhttp"
 	"zombiezen.com/go/log"
 	"zombiezen.com/go/nix"
-	"zombiezen.com/go/sqlite"
-	"zombiezen.com/go/sqlite/sqlitemigration"
-	"zombiezen.com/go/sqlite/sqlitex"
+	"zombiezen.com/go/nix/nar"
+	"zombiezen.com/go/nixcached/internal/nixstore"
 )
 
 func newServeCommand(g *globalConfig) *cobra.Command {
@@ -78,67 +77,36 @@ func runServe(ctx context.Context, g *globalConfig, listenAddr string, resources
 	}
 	log.Debugf(ctx, "Created %s", tempDir)
 	defer func() {
+		log.Debugf(ctx, "Removing %s...", tempDir)
 		if err := os.RemoveAll(tempDir); err != nil {
 			log.Warnf(ctx, "Clean up: %v", err)
 		}
 	}()
-	cachePool := sqlitemigration.NewPool(filepath.Join(tempDir, "cache.db"), uiCacheSchema, sqlitemigration.Options{
-		OnStartMigrate: func() {
-			log.Debugf(ctx, "Cache database migration starting...")
-		},
-		OnReady: func() {
-			log.Debugf(ctx, "Cache database ready")
-		},
-		OnError: func(err error) {
-			log.Errorf(ctx, "Cache setup: %v", err)
-		},
-		PrepareConn: prepareUICacheConn,
-	})
-	defer cachePool.Close()
 
-	opener, err := newBucketURLOpener(ctx)
-	if err != nil {
-		return err
-	}
-	bucket, err := opener.OpenBucket(ctx, src)
-	if err != nil {
-		return err
-	}
-	defer bucket.Close()
-
-	crawlCtx, cancelCrawl := context.WithCancel(ctx)
-	crawlDone := make(chan struct{})
-	go func() {
-		defer close(crawlDone)
-		ticker := time.NewTicker(crawlFrequency)
-		defer ticker.Stop()
-		for {
-			conn, err := cachePool.Get(crawlCtx)
-			if err != nil {
-				return
-			}
-			crawl(crawlCtx, conn, bucket)
-			cachePool.Put(conn)
-
-			select {
-			case <-ticker.C:
-			case <-crawlCtx.Done():
-				return
-			}
+	var store nixstore.Store
+	if strings.HasPrefix(src, "/") {
+		dir, err := nix.CleanStoreDirectory(src)
+		if err != nil {
+			return err
 		}
-	}()
-	defer func() {
-		log.Debugf(ctx, "Shutting down crawl...")
-		cancelCrawl()
-		<-crawlDone
-		log.Debugf(ctx, "Crawl shutdown complete")
-	}()
+		store = &nixstore.Local{Directory: dir}
+	} else {
+		opener, err := newBucketURLOpener(ctx)
+		if err != nil {
+			return err
+		}
+		bstore, err := nixstore.OpenBucket(ctx, opener, src)
+		if err != nil {
+			return err
+		}
+		defer bstore.Close()
+		store = bstore
+	}
 
 	srv := &http.Server{
 		Addr: listenAddr,
-		Handler: &bucketServer{
-			bucket:    bucket,
-			cache:     cachePool,
+		Handler: &storeServer{
+			store:     store,
 			resources: resources,
 		},
 		ReadHeaderTimeout: 30 * time.Second,
@@ -168,13 +136,12 @@ func runServe(ctx context.Context, g *globalConfig, listenAddr string, resources
 //go:embed templates
 var embeddedResources embed.FS
 
-type bucketServer struct {
-	bucket    *blob.Bucket
-	cache     *sqlitemigration.Pool
+type storeServer struct {
+	store     nixstore.Store
 	resources fs.FS
 }
 
-func (srv *bucketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (srv *storeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	cfg := &action.Config[*http.Request]{
 		MaxRequestSize: 1 << 20, // 1 MiB
@@ -247,24 +214,18 @@ func (srv *bucketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fallback: bucket content.
-	handlers.MethodHandler{
-		http.MethodGet:  http.HandlerFunc(srv.serveContent),
-		http.MethodHead: http.HandlerFunc(srv.serveContent),
-	}.ServeHTTP(w, r)
+	if _, _, ok := parseNARURLPath(r.URL.Path); ok {
+		handlers.MethodHandler{
+			http.MethodGet:  http.HandlerFunc(srv.serveNAR),
+			http.MethodHead: http.HandlerFunc(srv.serveNAR),
+		}.ServeHTTP(w, r)
+		return
+	}
+
+	http.NotFound(w, r)
 }
 
-//go:embed uicache_index.sql
-var indexQuery string
-
-func (srv *bucketServer) serveIndex(ctx context.Context, r *http.Request) (_ *action.Response, err error) {
-	conn, err := srv.cache.Get(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer srv.cache.Put(conn)
-	defer sqlitex.Transaction(conn)(&err)
-
+func (srv *storeServer) serveIndex(ctx context.Context, r *http.Request) (*action.Response, error) {
 	type expandedNARInfo struct {
 		*nix.NARInfo
 		ClosureFileSize int64
@@ -275,54 +236,45 @@ func (srv *bucketServer) serveIndex(ctx context.Context, r *http.Request) (_ *ac
 		CacheInfo            *nix.CacheInfo
 		Infos                []expandedNARInfo
 	}
-	err = sqlitex.Execute(conn, `select "initial_crawl_complete" from "uicache_status";`, &sqlitex.ExecOptions{
-		ResultFunc: func(stmt *sqlite.Stmt) error {
-			data.InitialCrawlComplete = stmt.ColumnBool(0)
-			return nil
-		},
-	})
+
+	var err error
+	data.CacheInfo, err = srv.store.CacheInfo(ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	if data.InitialCrawlComplete {
-		data.CacheInfo, _, err = readCachedCacheInfo(ctx, conn)
-		if err != nil {
-			log.Warnf(ctx, "%v", err)
-			data.CacheInfo = new(nix.CacheInfo)
+	iter := srv.store.List(ctx)
+	for {
+		digest, err := iter.NextDigest(ctx)
+		if err == io.EOF {
+			break
 		}
-		if data.CacheInfo.StoreDirectory == "" {
-			data.CacheInfo.StoreDirectory = nix.DefaultStoreDirectory
-		}
-		// To match served version:
-		data.CacheInfo.WantMassQuery = true
-
-		var buf []byte
-		err = sqlitex.Execute(conn, strings.TrimSpace(indexQuery), &sqlitex.ExecOptions{
-			ResultFunc: func(stmt *sqlite.Stmt) error {
-				if n := stmt.GetLen("narinfo"); n > cap(buf) {
-					buf = make([]byte, n)
-				} else {
-					buf = buf[:n]
-				}
-				stmt.GetBytes("narinfo", buf)
-				info := new(nix.NARInfo)
-				if err := info.UnmarshalText(buf); err != nil {
-					log.Warnf(ctx, "Unable to parse %s: %v", stmt.GetText("hash")+nix.NARInfoExtension, buf)
-					return nil
-				}
-				data.Infos = append(data.Infos, expandedNARInfo{
-					NARInfo:         info,
-					ClosureFileSize: stmt.GetInt64("closure_file_size"),
-					ClosureNARSize:  stmt.GetInt64("closure_nar_size"),
-				})
-				return nil
-			},
-		})
 		if err != nil {
 			return nil, err
 		}
+		info, _, err := srv.store.NARInfo(ctx, digest)
+		if err != nil {
+			log.Warnf(ctx, "%v", err)
+			continue
+		}
+		info.URL, err = buildNARURL(digest, info.Compression)
+		if err != nil {
+			log.Warnf(ctx, "%v", err)
+			continue
+		}
+		data.Infos = append(data.Infos, expandedNARInfo{
+			NARInfo:         info,
+			ClosureFileSize: info.FileSize,
+			ClosureNARSize:  info.NARSize,
+		})
 	}
+	sort.Slice(data.Infos, func(i, j int) bool {
+		nameI := data.Infos[i].StorePath.Name()
+		nameJ := data.Infos[j].StorePath.Name()
+		if nameI != nameJ {
+			return nameI < nameJ
+		}
+		return data.Infos[i].StorePath.Digest() < data.Infos[j].StorePath.Digest()
+	})
 
 	return &action.Response{
 		HTMLTemplate: "index.html",
@@ -330,24 +282,15 @@ func (srv *bucketServer) serveIndex(ctx context.Context, r *http.Request) (_ *ac
 	}, nil
 }
 
-func (srv *bucketServer) serveCacheInfo(ctx context.Context, r *http.Request) (_ *action.Response, err error) {
-	conn, err := srv.cache.Get(ctx)
+func (srv *storeServer) serveCacheInfo(ctx context.Context, r *http.Request) (_ *action.Response, err error) {
+	info, err := srv.store.CacheInfo(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer srv.cache.Put(conn)
-	defer sqlitex.Transaction(conn)(&err)
-
-	cfg, _, err := readCachedCacheInfo(ctx, conn)
+	data, err := info.MarshalText()
 	if err != nil {
 		return nil, err
 	}
-	cfg.WantMassQuery = true
-	data, err := cfg.MarshalText()
-	if err != nil {
-		return nil, err
-	}
-
 	return &action.Response{
 		Other: []*action.Representation{{
 			Header: http.Header{
@@ -359,83 +302,29 @@ func (srv *bucketServer) serveCacheInfo(ctx context.Context, r *http.Request) (_
 	}, nil
 }
 
-func (srv *bucketServer) serveNARInfo(ctx context.Context, r *http.Request) (_ *action.Response, err error) {
+func (srv *storeServer) serveNARInfo(ctx context.Context, r *http.Request) (*action.Response, error) {
 	if !isNARInfoPath(r.URL.Path) {
 		return nil, action.ErrNotFound
 	}
 	digest := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/"), nix.NARInfoExtension)
-
-	conn, err := srv.cache.Get(ctx)
+	info, _, err := srv.store.NARInfo(ctx, digest)
+	if errors.Is(err, nixstore.ErrNotFound) {
+		return nil, action.ErrNotFound
+	}
 	if err != nil {
 		return nil, err
 	}
-	defer srv.cache.Put(conn)
-
-	// Run single query in automatic transaction.
-	const query = `select "narinfo" from "nar_infos" where "hash" = :hash limit 1;`
-	var data []byte
-	cached := false
-	err = sqlitex.Execute(conn, query, &sqlitex.ExecOptions{
-		Named: map[string]any{
-			":hash": digest,
-		},
-		ResultFunc: func(stmt *sqlite.Stmt) error {
-			data = make([]byte, stmt.ColumnLen(0))
-			stmt.ColumnBytes(0, data)
-			cached = true
-			return nil
-		},
-	})
+	info.URL, err = buildNARURL(digest, info.Compression)
 	if err != nil {
 		return nil, err
 	}
-
-	if cached {
-		log.Debugf(ctx, "Serving cached data for %s", r.URL.Path)
-	} else {
-		log.Debugf(ctx, "No cached result for %s; looking up in bucket", r.URL.Path)
-		data, err = srv.bucket.ReadAll(ctx, digest+nix.NARInfoExtension)
-		if gcerrors.Code(err) == gcerrors.NotFound {
-			return nil, action.ErrNotFound
-		}
-		if err != nil {
-			return nil, err
-		}
-
-		err = func() error {
-			endFn, err := sqlitex.ImmediateTransaction(conn)
-			if err != nil {
-				return err
-			}
-			defer endFn(&err)
-
-			info, _, err := readCachedCacheInfo(ctx, conn)
-			if err != nil {
-				return err
-			}
-			return updateNARInfoCache(ctx, conn, info.StoreDirectory, digest, data)
-		}()
-		if err != nil {
-			log.Warnf(ctx, "Failed to cache %s: %v", digest+nix.NARInfoExtension, err)
-		} else {
-			log.Debugf(ctx, "Added cache for %s", r.URL.Path)
-		}
-	}
-
-	var templateData struct {
-		Path string
-		Raw  []byte
-		Info *nix.NARInfo
-	}
-	templateData.Path = strings.TrimPrefix(r.URL.Path, "/")
-	templateData.Raw = data
-	templateData.Info = new(nix.NARInfo)
-	if err := templateData.Info.UnmarshalText(data); err != nil {
-		templateData.Info = nil
+	data, err := info.MarshalText()
+	if err != nil {
+		return nil, err
 	}
 	return &action.Response{
 		HTMLTemplate: "narinfo.html",
-		TemplateData: templateData,
+		TemplateData: info,
 		Other: []*action.Representation{{
 			Header: http.Header{
 				"Content-Type":   {nix.NARInfoMIMEType},
@@ -446,49 +335,45 @@ func (srv *bucketServer) serveNARInfo(ctx context.Context, r *http.Request) (_ *
 	}, nil
 }
 
-func (srv *bucketServer) serveContent(w http.ResponseWriter, r *http.Request) {
+func (srv *storeServer) serveNAR(w http.ResponseWriter, r *http.Request) {
 	// TODO(someday): Respect request cache headers.
-	// TODO(someday): Ensure reading consistent generation on GCS.
-	// TODO(someday): Range requests.
 
 	ctx := r.Context()
-	key := strings.TrimPrefix(r.URL.Path, "/")
-	attr, err := srv.bucket.Attributes(ctx, key)
-	if gcerrors.Code(err) == gcerrors.NotFound {
-		http.Error(w, "Object "+key+" not found in bucket", http.StatusNotFound)
+	digest, compression, ok := parseNARURLPath(r.URL.Path)
+	if !ok {
+		http.NotFound(w, r)
 		return
 	}
-	if err != nil {
-		log.Errorf(ctx, "Unable to query attributes for %s: %v", key, err)
-		http.Error(w, "unable to query attributes for "+key, http.StatusBadGateway)
-		return
-	}
-	w.Header().Set("Content-Length", strconv.FormatInt(attr.Size, 10))
-	w.Header().Set("Content-Type", attr.ContentType)
-	if attr.ContentEncoding != "" {
-		w.Header().Set("Content-Encoding", attr.ContentEncoding)
-	}
-	if attr.CacheControl != "" {
-		w.Header().Set("Cache-Control", attr.CacheControl)
-	}
-	if !attr.ModTime.IsZero() {
-		w.Header().Set("Last-Modified", attr.ModTime.Format(http.TimeFormat))
-	}
-	if attr.ETag != "" {
-		w.Header().Set("ETag", attr.ETag)
-	}
-
-	if r.Method == http.MethodHead {
-		return
-	}
-	err = srv.bucket.Download(ctx, key, w, nil)
-	if gcerrors.Code(err) == gcerrors.NotFound {
+	info, infoURL, err := srv.store.NARInfo(ctx, digest)
+	if errors.Is(err, nixstore.ErrNotFound) || (err == nil && info.Compression != compression) {
 		http.NotFound(w, r)
 		return
 	}
 	if err != nil {
-		log.Errorf(ctx, "Unable to read %s: %v", key, err)
-		http.Error(w, "unable to read "+key, http.StatusBadGateway)
+		log.Errorf(ctx, "%v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	ref, err := url.Parse(info.URL)
+	if err != nil {
+		log.Errorf(ctx, "%v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	downloadURL := infoURL.ResolveReference(ref)
+	w.Header().Set("Content-Length", strconv.FormatInt(info.FileSize, 10))
+	w.Header().Set("Content-Type", compressionMIMEType(nar.MIMEType, compression))
+	w.Header().Set("ETag", `"`+info.FileHash.SRI()+`"`)
+
+	if r.Method == http.MethodHead {
+		return
+	}
+	err = srv.store.Download(ctx, w, downloadURL)
+	if errors.Is(err, nixstore.ErrNotFound) {
+		w.Header().Del("Content-Length")
+		w.Header().Del("Content-Type")
+		w.Header().Del("ETag")
+		http.NotFound(w, r)
 		return
 	}
 }
@@ -501,6 +386,45 @@ func isNARInfoPath(path string) bool {
 	}
 	p, err := nix.DefaultStoreDirectory.Object(digest + "-x")
 	return err == nil && p.Digest() == digest && p.Name() == "x"
+}
+
+var compressionExtensions = map[nix.CompressionType]string{
+	nix.NoCompression: "",
+	nix.Bzip2:         ".bz2",
+	nix.Gzip:          ".gz",
+	nix.Brotli:        ".br",
+}
+
+func parseNARURLPath(path string) (digest string, compression nix.CompressionType, ok bool) {
+	tail, ok := strings.CutPrefix(path, "/nar/")
+	if !ok {
+		return "", "", false
+	}
+	i := strings.LastIndex(tail, nar.Extension)
+	if i < 0 {
+		return "", "", false
+	}
+	digest = tail[:i]
+	p, err := nix.DefaultStoreDirectory.Object(digest + "-x")
+	if err != nil || p.Digest() != digest || p.Name() != "x" {
+		return "", "", false
+	}
+	ext := tail[i+len(nar.Extension):]
+	for c, cext := range compressionExtensions {
+		if ext == cext {
+			return digest, c, true
+		}
+	}
+	return "", "", false
+}
+
+func buildNARURL(digest string, compression nix.CompressionType) (string, error) {
+	u := "nar/" + digest + nar.Extension
+	ext, ok := compressionExtensions[compression]
+	if !ok {
+		return "", fmt.Errorf("unsupported compression type %q for %s", compression, digest)
+	}
+	return u + ext, nil
 }
 
 func formatSize(v reflect.Value) (string, error) {
