@@ -28,8 +28,8 @@ insert into "store_objects" (
   hash_type(:nar_hash),
   hash_bytes(:nar_hash),
   :nar_size,
-  iif(:deriver <> '', path_base(:deriver), null),
-  iif(:ca <> '', :ca, null)
+  path_base(nullif(:deriver, '')),
+  nullif(:ca, '')
 ) on conflict ("path_digest") do update set
   "path_name" = store_path_name(:store_path),
   "url" = :url,
@@ -40,8 +40,8 @@ insert into "store_objects" (
   "nar_hash_type" = hash_type(:nar_hash),
   "nar_hash_bytes" = hash_bytes(:nar_hash),
   "nar_size" = :nar_size,
-  "deriver" = iif(:deriver <> '', path_base(:deriver), null),
-  "ca" = iif(:ca <> '', :ca, null);
+  "deriver" = path_base(nullif(:deriver, '')),
+  "ca" = nullif(:ca, '');
 
 insert into "store_object_references" (
   "path_digest",
