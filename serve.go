@@ -60,13 +60,19 @@ func newServeCommand(g *globalConfig) *cobra.Command {
 	}
 	host := c.Flags().String("host", "localhost", "`interface` to listen on")
 	port := c.Flags().Uint16P("port", "p", 8080, "`port` to listen on")
-	resources := c.Flags().String("resources", "", "`path` to resource files (defaults to using embedded files)")
+	client := c.Flags().String("client", "", "`path` to client resource files (defaults to using embedded files)")
 	maxListFrequency := c.Flags().Duration("max-list-frequency", 2*time.Minute, "minimum `duration` of time between starting listings")
 	c.RunE = func(cmd *cobra.Command, args []string) error {
 		listenAddr := net.JoinHostPort(*host, strconv.Itoa(int(*port)))
-		resourcesFS := fs.FS(embeddedResources)
-		if *resources != "" {
-			resourcesFS = os.DirFS(*resources)
+		var resourcesFS fs.FS
+		if *client != "" {
+			resourcesFS = os.DirFS(*client)
+		} else {
+			var err error
+			resourcesFS, err = fs.Sub(embeddedResources, "client")
+			if err != nil {
+				return err
+			}
 		}
 		return runServe(cmd.Context(), g, listenAddr, resourcesFS, args[0], *maxListFrequency)
 	}
@@ -166,8 +172,8 @@ func runServe(ctx context.Context, g *globalConfig, listenAddr string, resources
 	})
 }
 
-//go:embed static
-//go:embed templates
+//go:embed client/dist
+//go:embed client/templates
 var embeddedResources embed.FS
 
 type storeServer struct {
@@ -245,7 +251,7 @@ func (srv *storeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	const staticPrefix = "/_/"
 	if strings.HasPrefix(r.URL.Path, staticPrefix) {
-		static, err := fs.Sub(srv.resources, "static")
+		static, err := fs.Sub(srv.resources, "dist")
 		if err != nil {
 			log.Errorf(ctx, "Can't get static: %v", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)

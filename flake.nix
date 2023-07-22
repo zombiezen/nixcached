@@ -27,7 +27,10 @@
       let
         pkgs = import nixpkgs { inherit system; };
       in {
-        packages.default = pkgs.callPackage ./. {};
+        packages.default = pkgs.callPackage ./. {
+          go = pkgs.go_1_20;
+          sass = pkgs.dart-sass;
+        };
 
         apps.default = {
           type = "app";
@@ -36,8 +39,11 @@
 
         devShells.default = pkgs.mkShell {
           packages = [
+            self.packages.${system}.default.go
+            self.packages.${system}.default.redo
+            self.packages.${system}.default.sass
+
             pkgs.go-tools # staticcheck
-            pkgs.go_1_20
             pkgs.gotools # stringer, etc.
           ];
         };
