@@ -1,7 +1,25 @@
+$body-family: Helvetica, Arial, sans-serif;
+$monospace-family: 'Courier New', Courier, monospace;
 html, body {
-  font-family: Helvetica, Arial, sans-serif;
+  font-family: $body-family;
   margin: 0;
   padding: 0;
+  @media (prefers-color-scheme: light) {
+    background: white;
+    color: black;
+  }
+  @media (prefers-color-scheme: dark) {
+    background: #232323;
+    color: white;
+  }
+}
+@media (prefers-color-scheme: dark) {
+  :link {
+    color: #3b46e8;
+  }
+  :visited {
+    color: #a645c4;
+  }
 }
 .Main {
   margin: 0 1rem;
@@ -20,7 +38,7 @@ html, body {
   padding: 0;
 }
 .CacheInfo-code {
-  font-family: 'Courier New', Courier, monospace;
+  font-family: $monospace-family;
 }
 .CacheInfo-caption {
   background: rgba(0, 0, 0, 0.1);
@@ -48,31 +66,32 @@ html, body {
   font-size: 1.1rem;
   padding: 0.25rem 1rem;
 }
+$Listing-rowPadding: 0.25rem;
 .Listing {
-  --row-padding: 0.25rem;
 }
 .Listing-heading {
   font-weight: bold;
-  padding: 0 0 var(--row-padding, 0);
+  padding: 0 0 $Listing-rowPadding;
   text-align: left;
-}
-.Listing-heading.Listing-heading--size {
-  text-align: center;
+
+  &.Listing-heading--size {
+    text-align: center;
+  }
 }
 .Listing-objectName {
   font-weight: normal;
-  padding: var(--row-padding, 0) 1rem var(--row-padding, 0) 0;
+  padding: $Listing-rowPadding 1rem $Listing-rowPadding 0;
   text-align: left;
 }
 .Listing-objectHash {
-  font-family: 'Courier New', Courier, monospace;
+  font-family: $monospace-family;
   font-weight: normal;
-  padding: var(--row-padding, 0) 0.1rem;
+  padding: $Listing-rowPadding 0.1rem;
   text-align: left;
 }
 .Listing-objectSize {
   font-weight: normal;
-  padding: var(--row-padding, 0) 0.5rem;
+  padding: $Listing-rowPadding 0.5rem;
   text-align: right;
 }
 .NextPage {
@@ -80,35 +99,41 @@ html, body {
   margin: 0.75rem 0;
   padding: 0;
 }
+@mixin footerColor {
+  color: rgba(0, 0, 0, 0.8);
+  @media (prefers-color-scheme: dark) {
+    color: rgba(255, 255, 255, 0.8);
+  }
+}
 .Footer {
   margin: 3rem 0 1rem;
 }
 .Footer-copy {
-  color: rgba(0, 0, 0, 0.8);
+  @include footerColor;
   font-size: 0.9rem;
   text-align: center;
 }
 .Footer-link {
-  color: rgba(0, 0, 0, 0.8);
+  @include footerColor;
 }
+$NARInfo-rowPadding: 0.20rem;
 .NARInfo {
-  --row-padding: 0.20rem;
   margin: 1.5rem 0;
 }
 .NARInfo-key {
   font-weight: bold;
-  padding: var(--row-padding, 0) 0.75em var(--row-padding, 0) 0;
+  padding: $NARInfo-rowPadding 0.75em $NARInfo-rowPadding 0;
   text-align: left;
   vertical-align: top;
 }
 .NARInfo-value {
-  font-family: 'Courier New', Courier, monospace;
+  font-family: $monospace-family;
   line-height: 1.5;
-  padding: 0 0 var(--row-padding, 0);
+  padding: 0 0 $NARInfo-rowPadding;
   vertical-align: top;
 }
 .NARInfo-sizeSummary {
-  font-family: Helvetica, Arial, sans-serif;
+  font-family: $body-family;
 }
 .NARInfoRaw {
   margin: 1.5rem 0;
