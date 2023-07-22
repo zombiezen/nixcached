@@ -18,6 +18,10 @@
       Refresh for more results.
     </div>
   {{- end }}
+  <form method="GET" action="/" class="ListingSearch">
+    <input name="q" type="search" class="ListingSearch-box" value="{{ .Query }}">
+    <input type="submit" class="ListingSearch-button" value="Search">
+  </form>
   {{- with .Infos }}
     <table class="Listing">
       <thead>
@@ -63,5 +67,10 @@
         {{- end }}
       </tbody>
     </table>
+  {{- end }}
+  {{- if .NextPage }}
+    <div class="NextPage">
+      <a href="/?q={{ .Query }}&after={{ .NextPage }}">Next Page &rarr;</a>
+    </div>
   {{- end }}
 {{- end }}

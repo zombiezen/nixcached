@@ -271,6 +271,8 @@ func (srv *storeServer) serveIndex(ctx context.Context, r *http.Request) (*actio
 		InitialCrawlComplete bool
 		CacheInfo            *nix.CacheInfo
 		Infos                []expandedNARInfo
+		Query                string
+		NextPage             string
 	}
 
 	conn, err := srv.cache.Get(ctx)
@@ -289,9 +291,17 @@ func (srv *storeServer) serveIndex(ctx context.Context, r *http.Request) (*actio
 	}
 
 	data.InitialCrawlComplete = srv.signalDiscovery(ctx, nil)
-	data.Infos, err = store.cachedList(ctx)
+	var hasMore bool
+	data.Query = r.URL.Query().Get("q")
+	data.Infos, hasMore, err = store.cachedList(ctx, cachedListOptions{
+		nameQuery:   data.Query,
+		afterDigest: r.URL.Query().Get("after"),
+	})
 	if err != nil {
 		return nil, err
+	}
+	if hasMore && len(data.Infos) > 0 {
+		data.NextPage = data.Infos[len(data.Infos)-1].StorePath.Digest()
 	}
 	for i := range data.Infos {
 		info := &data.Infos[i]

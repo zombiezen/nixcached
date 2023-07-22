@@ -223,9 +223,20 @@ type expandedNARInfo struct {
 	ClosureNARSize  int64
 }
 
-func (c uiCacheConn) cachedList(ctx context.Context) ([]expandedNARInfo, error) {
-	var list []expandedNARInfo
-	err := sqlitex.ExecuteFS(c.conn, uiCacheSQLFiles, "uicache/index.sql", &sqlitex.ExecOptions{
+type cachedListOptions struct {
+	afterDigest string
+	nameQuery   string
+}
+
+func (c uiCacheConn) cachedList(ctx context.Context, opts cachedListOptions) (list []expandedNARInfo, hasMore bool, err error) {
+	defer sqlitex.Save(c.conn)(&err)
+
+	args := map[string]any{
+		":after": opts.afterDigest,
+		":query": opts.nameQuery,
+	}
+	err = sqlitex.ExecuteFS(c.conn, uiCacheSQLFiles, "uicache/index.sql", &sqlitex.ExecOptions{
+		Named: args,
 		ResultFunc: func(stmt *sqlite.Stmt) error {
 			info := expandedNARInfo{NARInfo: new(nix.NARInfo)}
 			if err := extractNARInfoFromRow(info.NARInfo, stmt); err != nil {
@@ -238,9 +249,23 @@ func (c uiCacheConn) cachedList(ctx context.Context) ([]expandedNARInfo, error) 
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("list nar info: %w", err)
+		return nil, false, fmt.Errorf("list nar info: %w", err)
 	}
-	return list, nil
+	if len(list) == 0 {
+		return list, false, nil
+	}
+	args[":after"] = list[len(list)-1].StorePath.Digest()
+	err = sqlitex.ExecuteFS(c.conn, uiCacheSQLFiles, "uicache/has_more.sql", &sqlitex.ExecOptions{
+		Named: args,
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			hasMore = stmt.ColumnBool(0)
+			return nil
+		},
+	})
+	if err != nil {
+		return list, false, fmt.Errorf("list nar info: %w", err)
+	}
+	return list, hasMore, nil
 }
 
 func (c uiCacheConn) NARInfo(ctx context.Context, storePathDigest string) (*nix.NARInfo, error) {

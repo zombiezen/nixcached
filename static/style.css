@@ -35,6 +35,19 @@ html, body {
   margin: 1rem 0;
   padding: 0;
 }
+.ListingSearch {
+  margin: 1.25rem 0;
+  padding: 0;
+}
+.ListingSearch-box {
+  font-size: 1.1rem;
+  min-width: 20rem;
+  padding: 0.25rem 0.1rem;
+}
+.ListingSearch-button {
+  font-size: 1.1rem;
+  padding: 0.25rem 1rem;
+}
 .Listing {
   --row-padding: 0.25rem;
 }
@@ -61,6 +74,11 @@ html, body {
   font-weight: normal;
   padding: var(--row-padding, 0) 0.5rem;
   text-align: right;
+}
+.NextPage {
+  font-size: 1.1rem;
+  margin: 0.75rem 0;
+  padding: 0;
 }
 .Footer {
   margin: 3rem 0 1rem;

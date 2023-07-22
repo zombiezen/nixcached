@@ -1,7 +1,21 @@
 with
+  "relevant_digests"("path_digest") as (
+    select "path_digest"
+    from "store_objects"
+    where
+      (:query is null or :query = '' or instr(lower("path_name"), lower(:query))) and (
+        (:after is null or :after = '') or
+        ("path_name", "path_digest") >
+          (coalesce((select "path_name" from "store_objects" where "path_digest" = :after), ''), :after)
+      )
+    order by "path_name", "path_digest"
+    limit 100
+  ),
   "requisites"("path_digest","requisite") as (
     select "path_digest", "reference" from "store_object_references"
-      where "path_digest" <> store_path_digest("reference")
+      where
+        "path_digest" <> store_path_digest("reference") and
+        "path_digest" in (select "path_digest" from "relevant_digests")
     union
     select "refs"."path_digest", "refs"."reference"
       from "requisites" as "reqs"
@@ -30,4 +44,5 @@ select
       join "store_objects" as r on store_path_digest("requisites"."requisite") = r."path_digest"
     where "requisites"."path_digest" = "narinfo"."store_path_digest"), 0) as "closure_nar_size"
 from "narinfo"
+where "store_path_digest" in (select "path_digest" from "relevant_digests")
 order by "store_path_name", "store_path_digest";
