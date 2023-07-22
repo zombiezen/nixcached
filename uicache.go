@@ -45,8 +45,13 @@ func uiCacheSchema() sqlitemigration.Schema {
 	if err != nil {
 		panic(err)
 	}
+	repeatable, err := fs.ReadFile(uiCacheSQLFiles, "uicache/repeatable.sql")
+	if err != nil {
+		panic(err)
+	}
 	return sqlitemigration.Schema{
-		Migrations: []string{string(src)},
+		Migrations:          []string{string(src)},
+		RepeatableMigration: string(repeatable),
 	}
 }
 

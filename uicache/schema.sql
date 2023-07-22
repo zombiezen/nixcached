@@ -37,6 +37,8 @@ create table "store_objects" (
   "ca" text
 );
 
+create index "store_objects_by_name" on "store_objects" ("path_name", "path_digest");
+
 create table "store_object_references" (
   "path_digest" text
     not null
