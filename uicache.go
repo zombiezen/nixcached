@@ -265,26 +265,42 @@ func (c uiCacheConn) NARInfo(ctx context.Context, storePathDigest string) (*nix.
 	}
 
 	log.Debugf(ctx, "No cached result for %s; looking up in underlying store", storePathDigest+nix.NARInfoExtension)
-	info, baseURL, err := c.store.NARInfo(ctx, storePathDigest)
+	info, err = c.narInfoFromStore(ctx, cacheInfo, storePathDigest)
 	if err != nil {
 		return nil, nil, err
 	}
-	if info.StoreDirectory() != cacheInfo.StoreDirectory {
-		return nil, nil, fmt.Errorf("store path %q is not inside %s", info.StorePath, cacheInfo.StoreDirectory)
-	}
-	if baseURL != nil {
-		u, err := url.Parse(info.URL)
+	err = func() (err error) {
+		endFn, err := sqlitex.ImmediateTransaction(c.conn)
 		if err != nil {
-			return nil, nil, fmt.Errorf("read nar info for %s: %v", storePathDigest, err)
+			return err
 		}
-		info.URL = baseURL.ResolveReference(u).String()
-	}
-	if err := updateCachedStoreObject(ctx, c.conn, info); err != nil {
+		defer endFn(&err)
+		return updateCachedStoreObject(ctx, c.conn, info)
+	}()
+	if err != nil {
 		log.Warnf(ctx, "Failed to cache %s: %v", storePathDigest+nix.NARInfoExtension, err)
 	} else {
 		log.Debugf(ctx, "Added cache for %s", storePathDigest+nix.NARInfoExtension)
 	}
 	return info, nil, nil
+}
+
+func (c uiCacheConn) narInfoFromStore(ctx context.Context, cacheInfo *nix.CacheInfo, storePathDigest string) (*nix.NARInfo, error) {
+	info, baseURL, err := c.store.NARInfo(ctx, storePathDigest)
+	if err != nil {
+		return nil, err
+	}
+	if info.StoreDirectory() != cacheInfo.StoreDirectory {
+		return nil, fmt.Errorf("store path %q is not inside %s", info.StorePath, cacheInfo.StoreDirectory)
+	}
+	if baseURL != nil {
+		u, err := url.Parse(info.URL)
+		if err != nil {
+			return nil, fmt.Errorf("read nar info for %s: %v", storePathDigest, err)
+		}
+		info.URL = baseURL.ResolveReference(u).String()
+	}
+	return info, nil
 }
 
 func extractNARInfoFromRow(info *nix.NARInfo, stmt *sqlite.Stmt) error {
@@ -373,23 +389,83 @@ func (iter uiCacheIterator) Close() error {
 }
 
 func (c uiCacheConn) discover(ctx context.Context) int64 {
+	// Ensure store directory cached.
+	cacheInfo, err := c.CacheInfo(ctx)
+	if err != nil {
+		log.Errorf(ctx, "During discovery: %v", err)
+		return 0
+	}
+
+	batch := make([]*nix.NARInfo, 0, 200)
+	flush := func() bool {
+		if len(batch) == 0 {
+			return true
+		}
+		endFn, err := sqlitex.ImmediateTransaction(c.conn)
+		if err != nil {
+			log.Errorf(ctx, "Could not open cache for writing: %v", err)
+			return false
+		}
+		for i, info := range batch {
+			if err := updateCachedStoreObject(ctx, c.conn, info); err != nil {
+				log.Errorf(ctx, "%v", err)
+			}
+			batch[i] = nil
+		}
+		endFn(&err)
+		batch = batch[:0]
+		if err != nil {
+			log.Errorf(ctx, "Could not save to cache: %v", err)
+			return false
+		}
+		return true
+	}
+
 	var n int64
 	for iter := c.store.List(ctx); ; {
-		digest, err := iter.NextDigest(ctx)
+		storePathDigest, err := iter.NextDigest(ctx)
 		if err != nil {
 			if err != io.EOF {
 				log.Errorf(ctx, "During discovery: %v", err)
 			}
+			flush()
 			return n
 		}
+		n++
 		if err := ctx.Err(); err != nil {
 			return n
 		}
 
-		log.Debugf(ctx, "Discovered %s", digest)
-		// TODO(now): Batch writes.
-		c.NARInfo(ctx, digest)
-		n++
+		// Run single query in automatic transaction.
+		var exists bool
+		err = sqlitex.Execute(c.conn, `select exists(select 1 from "store_objects" where "path_digest" = ?);`, &sqlitex.ExecOptions{
+			Args: []any{storePathDigest},
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				exists = stmt.ColumnBool(0)
+				return nil
+			},
+		})
+		if err != nil {
+			log.Errorf(ctx, "Querying cache for %s during discovery: %v", storePathDigest+nix.NARInfoExtension, err)
+			continue
+		}
+		if exists {
+			log.Debugf(ctx, "Rediscovered %s (already present in cache)", storePathDigest+nix.NARInfoExtension)
+			continue
+		}
+
+		log.Debugf(ctx, "Discovered %s", storePathDigest+nix.NARInfoExtension)
+		info, err := c.narInfoFromStore(ctx, cacheInfo, storePathDigest)
+		if err != nil {
+			log.Warnf(ctx, "Failed to cache %s: %v", storePathDigest+nix.NARInfoExtension, err)
+			continue
+		}
+		batch = append(batch, info)
+		if len(batch) == cap(batch) {
+			if !flush() {
+				return n
+			}
+		}
 	}
 }
 
@@ -413,16 +489,13 @@ func updateCachedStoreDirectory(ctx context.Context, conn *sqlite.Conn, storeDir
 }
 
 func updateCachedStoreObject(ctx context.Context, conn *sqlite.Conn, info *nix.NARInfo) (err error) {
+	release := sqlitex.Save(conn)
 	defer func() {
+		release(&err)
 		if err != nil {
 			err = fmt.Errorf("update %v cache: %v", info.StorePath.Digest()+nix.NARInfoExtension, err)
 		}
 	}()
-	endFn, err := sqlitex.ImmediateTransaction(conn)
-	if err != nil {
-		return err
-	}
-	defer endFn(&err)
 
 	references := []byte("[]")
 	if len(info.References) > 0 {
