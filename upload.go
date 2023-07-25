@@ -18,21 +18,25 @@ package main
 
 import (
 	"bufio"
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/dsnet/compress/bzip2"
 	"github.com/spf13/cobra"
 	"gocloud.dev/blob"
 	"gocloud.dev/gcerrors"
+	"golang.org/x/exp/slices"
 	"zombiezen.com/go/log"
 	"zombiezen.com/go/nix"
 	"zombiezen.com/go/nix/nar"
 	"zombiezen.com/go/nixcached/internal/nixstore"
+	"zombiezen.com/go/nixcached/internal/xzcmd"
 )
 
 func newUploadCommand(g *globalConfig) *cobra.Command {
@@ -48,9 +52,14 @@ func newUploadCommand(g *globalConfig) *cobra.Command {
 	keepAlive := c.Flags().BoolP("keep-alive", "k", false, "if input is a pipe, then keep running even when there are no senders")
 	opts := new(uploadOptions)
 	c.Flags().BoolVarP(&opts.overwrite, "force", "f", false, "replace already-uploaded store objects")
+	compression := c.Flags().String("compression", string(nix.XZ), "compression `algorithm` to use (one of "+supportedCompressionTypes()+")")
 	c.Flags().BoolVar(&opts.createListings, "write-nar-listing", true, "whether to write a JSON file that lists the files in each NAR")
 	c.RunE = func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
+		opts.compression = nix.CompressionType(*compression)
+		if compressionWrappers[opts.compression] == nil {
+			return fmt.Errorf("unsupported compression type %q", *compression)
+		}
 		storeDir, err := nix.StoreDirectoryFromEnvironment()
 		if err != nil {
 			return err
@@ -79,6 +88,7 @@ func newUploadCommand(g *globalConfig) *cobra.Command {
 type uploadOptions struct {
 	overwrite      bool
 	createListings bool
+	compression    nix.CompressionType
 }
 
 func runUpload(ctx context.Context, g *globalConfig, destinationBucketURL string, input io.Reader, storeDir nix.StoreDirectory, opts *uploadOptions) error {
@@ -317,7 +327,7 @@ func uploadStorePath(ctx context.Context, storeClient *nixstore.Local, destinati
 		}
 	}()
 
-	writtenInfo, listing, md5Hash, err := dump(ctx, f, info.StorePath, opts.createListings)
+	writtenInfo, listing, md5Hash, err := dump(ctx, f, info.StorePath, opts.compression, opts.createListings)
 	if err != nil {
 		return fmt.Errorf("upload %s: %v", info.StorePath, err)
 	}
@@ -388,14 +398,18 @@ func uploadStorePath(ctx context.Context, storeClient *nixstore.Local, destinati
 
 // dump archives the store path to a compressed NAR file in w.
 // Optionally, it also generates a listing of the NAR file.
-func dump(ctx context.Context, w io.Writer, path nix.StorePath, listing bool) (info *nix.NARInfo, ls *nar.Listing, md5Hash nix.Hash, err error) {
+func dump(ctx context.Context, w io.Writer, path nix.StorePath, ct nix.CompressionType, listing bool) (info *nix.NARInfo, ls *nar.Listing, md5Hash nix.Hash, err error) {
 	compressedHashWriter := newHashWriter(nix.SHA256, w)
 	compressedMD5Writer := newHashWriter(nix.MD5, compressedHashWriter)
-	bzWriter, err := bzip2.NewWriter(compressedMD5Writer, nil)
+	compress := compressionWrappers[ct]
+	if compress == nil {
+		return nil, nil, nix.Hash{}, fmt.Errorf("unsupported compression type %q", ct)
+	}
+	compressedWriter, err := compress(compressedMD5Writer)
 	if err != nil {
 		return nil, nil, nix.Hash{}, err
 	}
-	uncompressedHashWriter := newHashWriter(nix.SHA256, bzWriter)
+	uncompressedHashWriter := newHashWriter(nix.SHA256, compressedWriter)
 
 	var dumpOutput io.Writer = uncompressedHashWriter
 	var listingWriter *io.PipeWriter
@@ -423,7 +437,7 @@ func dump(ctx context.Context, w io.Writer, path nix.StorePath, listing bool) (i
 	if err := nar.DumpPath(dumpOutput, string(path)); err != nil {
 		return nil, nil, nix.Hash{}, err
 	}
-	if err := bzWriter.Close(); err != nil {
+	if err := compressedWriter.Close(); err != nil {
 		return nil, nil, nix.Hash{}, err
 	}
 	if listing {
@@ -439,8 +453,44 @@ func dump(ctx context.Context, w io.Writer, path nix.StorePath, listing bool) (i
 		FileHash:    compressedHashWriter.sum(),
 		FileSize:    compressedHashWriter.n,
 	}
-	info.URL = "nar/" + info.FileHash.RawBase32() + ".nar.bz2"
+	info.URL = "nar/" + info.FileHash.RawBase32() + ".nar" + compressionExtensions[ct]
 	return info, ls, compressedMD5Writer.sum(), nil
+}
+
+var compressionWrappers = map[nix.CompressionType]func(io.Writer) (io.WriteCloser, error){
+	nix.NoCompression: func(w io.Writer) (io.WriteCloser, error) {
+		return nopWriteCloser{w}, nil
+	},
+	nix.Gzip: func(w io.Writer) (io.WriteCloser, error) {
+		return gzip.NewWriter(w), nil
+	},
+	nix.Bzip2: func(w io.Writer) (io.WriteCloser, error) {
+		return bzip2.NewWriter(w, nil)
+	},
+	nix.XZ: func(w io.Writer) (io.WriteCloser, error) {
+		return xzcmd.NewWriter(w, &xzcmd.WriterOptions{
+			Executable: os.Getenv("XZ"),
+		}), nil
+	},
+}
+
+func supportedCompressionTypes() string {
+	words := make([]string, 0, len(compressionWrappers))
+	for k := range compressionWrappers {
+		words = append(words, string(k))
+	}
+	slices.Sort(words)
+	sb := new(strings.Builder)
+	for i, w := range words {
+		if i > 0 {
+			sb.WriteString(", ")
+			if i == len(words)-1 {
+				sb.WriteString("or ")
+			}
+		}
+		sb.WriteString(w)
+	}
+	return sb.String()
 }
 
 // checkUploadOverwrite determines whether there is
@@ -509,6 +559,18 @@ func compressionMIMEType(underlying string, ct nix.CompressionType) string {
 	default:
 		return "application/octet-stream"
 	}
+}
+
+type nopWriteCloser struct {
+	w io.Writer
+}
+
+func (wc nopWriteCloser) Write(p []byte) (n int, err error) {
+	return wc.w.Write(p)
+}
+
+func (wc nopWriteCloser) Close() error {
+	return nil
 }
 
 type hashWriter struct {

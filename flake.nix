@@ -42,6 +42,7 @@
             self.packages.${system}.default.go
             self.packages.${system}.default.redo
             self.packages.${system}.default.sass
+            self.packages.${system}.default.xz
 
             pkgs.go-tools # staticcheck
             pkgs.gotools # stringer, etc.

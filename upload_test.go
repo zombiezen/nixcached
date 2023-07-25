@@ -58,7 +58,7 @@ func TestDump(t *testing.T) {
 		}
 
 		buf := new(bytes.Buffer)
-		gotInfo, gotListing, gotMD5, err := dump(ctx, buf, storePath, false)
+		gotInfo, gotListing, gotMD5, err := dump(ctx, buf, storePath, nix.Bzip2, false)
 		if err != nil {
 			t.Error(err)
 		}
@@ -115,7 +115,7 @@ func TestDump(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		_, got, _, err := dump(ctx, io.Discard, storePath, true)
+		_, got, _, err := dump(ctx, io.Discard, storePath, nix.Bzip2, true)
 		if err != nil {
 			t.Error(err)
 		}
