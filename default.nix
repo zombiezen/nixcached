@@ -2,6 +2,7 @@
 , stdenv
 , doCheck ? false
 , makeBinaryWrapper
+, nix-gitignore
 , runCommandLocal
 , cacert
 , git
@@ -29,9 +30,14 @@ let
     maintainers = [ lib.maintainers.zombiezen ];
   };
 
-  src = builtins.path {
+  src = let
+    root = ./.;
+    patterns = nix-gitignore.withGitignoreFile extraIgnores root;
+    extraIgnores = [ "*.nix" "flake.lock" ];
+  in builtins.path {
     name = "${pname}-source";
-    path = ./.;
+    path = root;
+    filter = nix-gitignore.gitignoreFilterPure (_: _: true) patterns root;
   };
 
   go-modules = stdenv.mkDerivation {
