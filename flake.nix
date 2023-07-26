@@ -32,6 +32,25 @@
           sass = pkgs.dart-sass;
         };
 
+        packages.systemd-example =
+          let
+            inherit (pkgs.nixos {
+              imports = [ self.nixosModules.default ];
+              services.nixcached.upload = {
+                enable = true;
+                bucketURL = "s3://nix-cache";
+              };
+              system.stateVersion = "23.11";
+            }) etc;
+          in
+            pkgs.runCommandLocal "nixcached-systemd-example" {} ''
+              mkdir -p "$out/etc/systemd/system"
+              cp --reflink=auto \
+                ${etc}/etc/systemd/system/nixcached-upload.service \
+                ${etc}/etc/systemd/system/nixcached-upload.socket \
+                "$out/etc/systemd/system/"
+            '';
+
         apps.default = {
           type = "app";
           program = "${self.packages.${system}.default}/bin/nixcached";
@@ -49,5 +68,10 @@
           ];
         };
       }
-    );
+    ) // {
+      nixosModules.default = { pkgs, lib, ... }: {
+        imports = [ ./module.nix ];
+        services.nixcached.package = lib.mkDefault self.packages.${pkgs.hostPlatform.system}.default;
+      };
+    };
 }
