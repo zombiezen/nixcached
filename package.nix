@@ -33,7 +33,7 @@ let
   src = let
     root = ./.;
     patterns = nix-gitignore.withGitignoreFile extraIgnores root;
-    extraIgnores = [ "*.nix" "flake.lock" ];
+    extraIgnores = [ ".github" ".vscode" "*.nix" "flake.lock" ];
   in builtins.path {
     name = "${pname}-source";
     path = root;
@@ -89,6 +89,14 @@ let
 
     inherit doCheck;
 
+    patchPhase = ''
+      runHook prePatch
+
+      echo "$version" > version.txt
+
+      runHook postPatch
+    '';
+
     configurePhase = ''
       export GOCACHE=$TMPDIR/go-cache
       export GOPATH="$TMPDIR/go"
@@ -99,7 +107,7 @@ let
       cp -r --reflink=auto ${go-modules} vendor
     '';
     buildPhase = ''
-      redo -j$NIX_BUILD_CORES
+      redo -j$NIX_BUILD_CORES nixcached
     '';
     installPhase = ''
       mkdir -p "$out/bin"

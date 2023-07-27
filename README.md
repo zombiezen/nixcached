@@ -12,7 +12,13 @@ or any S3-compatible storage like [MinIO][].
 
 ## Installation
 
-If you're already using Nix,
+nixcached is distributed as a [Docker][] image:
+
+```shell
+docker pull ghcr.io/zombiezen/nixcached
+```
+
+Alternatively, if you're already using Nix,
 you can install the binary by checking out the repository
 and running the following:
 
@@ -26,8 +32,9 @@ Or if you're using Nix Flakes:
 nix profile install github:zombiezen/nixcached/v0.1.0
 ```
 
-Otherwise, you can download a binary from the [latest release][].
+Otherwise, you can download a static binary from the [latest release][].
 
+[Docker]: https://www.docker.com/
 [latest release]: https://github.com/zombiezen/nixcached/releases/latest
 
 ## Caching Proxy

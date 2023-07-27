@@ -1,2 +1,4 @@
 /client/dist/
 /nixcached
+/binaries/nixcached-*
+/version.txt

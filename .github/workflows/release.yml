@@ -1,0 +1,105 @@
+# Copyright 2023 Ross Light
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: Release
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+
+env:
+  IMAGE_NAME: ghcr.io/zombiezen/nixcached
+
+jobs:
+  binary:
+    name: Build Binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: none
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v3
+      - name: Install Nix
+        uses: cachix/install-nix-action@v22
+      - name: Build
+        run: |
+          echo ${{ github.ref_name }} | sed -e 's/^v//' > version.txt
+          nix develop --command redo -j2 binaries/all
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            binaries/nixcached-*
+
+  docker:
+    name: Docker Push
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: ["amd64", "arm64"]
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v3
+      - name: Log into GitHub Container Registry
+        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u zombiezen --password-stdin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install Nix
+        uses: cachix/install-nix-action@v22
+      - id: build
+        name: Build
+        run: |
+          IMAGE_TAG="$(echo ${{ github.ref_name }} | sed -e 's/^v//')-${{ matrix.arch }}"
+          echo "tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          nix build \
+            --file docker.nix \
+            --argstr name "$IMAGE_NAME" \
+            --argstr tag "$IMAGE_TAG" \
+            --argstr rev ${{ github.sha }} \
+            --argstr system x86_64-linux
+      - name: Load into Docker
+        run: docker load < result
+      - name: Push to GitHub Container Registry
+        run: docker push "${IMAGE_NAME}:${IMAGE_TAG}"
+        env:
+          IMAGE_TAG: ${{ steps.build.outputs.tag }}
+  docker-manifest:
+    name: Create Multi-Arch Image
+    needs: [docker]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log into GitHub Container Registry
+        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u zombiezen --password-stdin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - id: manifest
+        name: Create manifest
+        run: |
+          IMAGE_TAG="$(echo ${{ github.ref_name }} | sed -e 's/^v//')"
+          echo "tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          docker manifest create \
+            "${IMAGE_NAME}:${IMAGE_TAG}" \
+            "${IMAGE_NAME}:${IMAGE_TAG}-amd64" \
+            "${IMAGE_NAME}:${IMAGE_TAG}-arm64"
+      - name: Push to GitHub Container Registry
+        run: docker manifest push "${IMAGE_NAME}:${IMAGE_TAG}"
+        env:
+          IMAGE_TAG: ${{ steps.manifest.outputs.tag }}
+
+permissions:
+  contents: read
+  packages: write

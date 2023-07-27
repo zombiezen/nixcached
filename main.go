@@ -33,6 +33,9 @@ import (
 	"zombiezen.com/go/log"
 )
 
+// version is a link-time constant of the program version.
+var version = ""
+
 type globalConfig struct {
 	// global options go here
 }
@@ -41,6 +44,7 @@ func main() {
 	rootCommand := &cobra.Command{
 		Use:           "nixcached",
 		Short:         "Nix cache daemon",
+		Version:       version,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 	}
