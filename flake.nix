@@ -20,6 +20,10 @@
   inputs = {
     nixpkgs.url = "nixpkgs";
     flake-utils.url = "flake-utils";
+    flake-compat = {
+      url = "github:edolstra/flake-compat";
+      flake = false;
+    };
   };
 
   outputs = { self, nixpkgs, flake-utils, ... }:
@@ -27,7 +31,7 @@
       let
         pkgs = import nixpkgs { inherit system; };
       in {
-        packages.default = pkgs.callPackage ./. {
+        packages.default = pkgs.callPackage ./package.nix {
           go = pkgs.go_1_20;
           sass = pkgs.dart-sass;
         };
