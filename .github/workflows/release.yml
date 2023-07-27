@@ -70,7 +70,7 @@ jobs:
             --argstr name "$IMAGE_NAME" \
             --argstr tag "$IMAGE_TAG" \
             --argstr rev ${{ github.sha }} \
-            --argstr system x86_64-linux
+            --argstr arch ${{ matrix.arch }}
       - name: Load into Docker
         run: docker load < result
       - name: Push to GitHub Container Registry

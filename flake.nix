@@ -67,10 +67,10 @@
           );
         } // pkgs.lib.optionalAttrs pkgs.hostPlatform.isLinux {
           docker-amd64 = self.lib.mkDocker {
-            pkgs = if pkgs.hostPlatform.isx86_64 then pkgs else pkgs.pkgsCross.musl64;
+            pkgs = (self.lib.pkgsCross system).linux_amd64;
           };
           docker-arm64 = self.lib.mkDocker {
-            pkgs = if pkgs.hostPlatform.isAarch64 then pkgs else pkgs.pkgsCross.aarch64-multiplatform-musl;
+            pkgs = (self.lib.pkgsCross system).linux_arm64;
           };
         };
 
@@ -95,6 +95,13 @@
       nixosModules.default = { pkgs, lib, ... }: {
         imports = [ ./module.nix ];
         services.nixcached.package = lib.mkDefault self.packages.${pkgs.hostPlatform.system}.default;
+      };
+
+      lib.pkgsCross = system: let pkgs = import nixpkgs { inherit system; }; in {
+        linux-amd64 = if pkgs.hostPlatform.isLinux && pkgs.hostPlatform.isx86_64 then pkgs
+          else pkgs.pkgsCross.musl64;
+        linux-arm64 = if pkgs.hostPlatform.isLinux && pkgs.hostPlatform.isAarch64 then pkgs
+          else pkgs.pkgsCross.aarch64-multiplatform-musl;
       };
 
       lib.mkNixcached = pkgs: pkgs.callPackage ./package.nix {

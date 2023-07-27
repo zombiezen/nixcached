@@ -16,6 +16,7 @@
 
 { name
 , tag
+, arch
 , rev ? null
 , system ? builtins.currentSystem
 }:
@@ -24,6 +25,6 @@ let
   flake = builtins.getFlake ("git+file:${builtins.toString ./.}" + (if !(builtins.isNull rev) then "?rev=${rev}&shallow=1" else ""));
 in
   flake.lib.mkDocker {
-    pkgs = import flake.inputs.nixpkgs { inherit system; };
+    pkgs = (flake.lib.pkgsCross system)."linux-${arch}";
     inherit name tag;
   }
