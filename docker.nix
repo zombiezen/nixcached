@@ -24,6 +24,6 @@ let
   flake = builtins.getFlake ("git+file:${builtins.toString ./.}" + (if !(builtins.isNull rev) then "?rev=${rev}&shallow=1" else ""));
 in
   flake.lib.mkDocker {
-    pkgs = flake.lib.nixpkgs system;
+    pkgs = import flake.inputs.nixpkgs { inherit system; };
     inherit name tag;
   }
