@@ -67,10 +67,10 @@
           );
         } // pkgs.lib.optionalAttrs pkgs.hostPlatform.isLinux {
           docker-amd64 = self.lib.mkDocker {
-            pkgs = (self.lib.pkgsCross system).linux_amd64;
+            pkgs = (self.lib.pkgsCross system).linux-amd64;
           };
           docker-arm64 = self.lib.mkDocker {
-            pkgs = (self.lib.pkgsCross system).linux_arm64;
+            pkgs = (self.lib.pkgsCross system).linux-arm64;
           };
         };
 
