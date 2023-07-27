@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -52,7 +53,11 @@ func newUploadCommand(g *globalConfig) *cobra.Command {
 	keepAlive := c.Flags().BoolP("keep-alive", "k", false, "if input is a pipe, then keep running even when there are no senders")
 	opts := new(uploadOptions)
 	c.Flags().BoolVarP(&opts.overwrite, "force", "f", false, "replace already-uploaded store objects")
-	compression := c.Flags().String("compression", string(nix.XZ), "compression `algorithm` to use (one of "+supportedCompressionTypes()+")")
+	defaultCompression := nix.Bzip2
+	if findXZExecutable() != "" {
+		defaultCompression = nix.XZ
+	}
+	compression := c.Flags().String("compression", string(defaultCompression), "compression `algorithm` to use (one of "+supportedCompressionTypes()+")")
 	c.Flags().BoolVar(&opts.createListings, "write-nar-listing", true, "whether to write a JSON file that lists the files in each NAR")
 	c.RunE = func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -469,7 +474,7 @@ var compressionWrappers = map[nix.CompressionType]func(io.Writer) (io.WriteClose
 	},
 	nix.XZ: func(w io.Writer) (io.WriteCloser, error) {
 		return xzcmd.NewWriter(w, &xzcmd.WriterOptions{
-			Executable: os.Getenv("XZ"),
+			Executable: findXZExecutable(),
 		}), nil
 	},
 }
@@ -491,6 +496,17 @@ func supportedCompressionTypes() string {
 		sb.WriteString(w)
 	}
 	return sb.String()
+}
+
+func findXZExecutable() string {
+	if path := os.Getenv("XZ"); path != "" {
+		return path
+	}
+	path, err := exec.LookPath("xz")
+	if err != nil {
+		return ""
+	}
+	return path
 }
 
 // checkUploadOverwrite determines whether there is
