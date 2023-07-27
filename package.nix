@@ -4,6 +4,7 @@
 , makeBinaryWrapper
 , nix-gitignore
 , runCommandLocal
+, testers
 , cacert
 , git
 , go
@@ -21,6 +22,11 @@ let
   passthru = {
     inherit go go-modules sass vendorHash xz;
     redo = redo-apenwarr;
+
+    tests.version = testers.testVersion {
+      package = nixcached;
+      inherit version;
+    };
   };
 
   meta = {

@@ -56,6 +56,7 @@
           ci = pkgs.linkFarm "nixcached-ci" (
             [
               { name = "nixcached"; path = self.packages.${system}.default; }
+              { name = "nixcached-tests/version"; path = self.packages.${system}.default.tests.version; }
             ] ++ pkgs.lib.lists.optional (self.packages.${system} ? docker-amd64) {
               name = "docker-image-nixcached-amd64.tar.gz";
               path = self.packages.${system}.docker-amd64;
