@@ -50,11 +50,11 @@ let
     name = "${pname}-go-modules";
     inherit src;
 
-    inherit (go) GOOS GOARCH;
+    inherit (go) GOOS GOARCH CGO_ENABLED;
     GO111MODULE = "on";
 
     impureEnvVars = lib.fetchers.proxyImpureEnvVars ++ [
-      "GIT_PROXY_COMMAND" "SOCKS_SERVER"
+      "GIT_PROXY_COMMAND" "SOCKS_SERVER" "GOPROXY"
     ];
 
     nativeBuildInputs = [
@@ -89,7 +89,7 @@ let
       sass
     ];
 
-    inherit (go) GOOS GOARCH;
+    inherit (go) GOOS GOARCH CGO_ENABLED;
     GO111MODULE = "on";
     GOFLAGS = [ "-mod=vendor" "-trimpath" ];
 
@@ -104,6 +104,8 @@ let
     '';
 
     configurePhase = ''
+      runHook preConfigure
+
       export GOCACHE=$TMPDIR/go-cache
       export GOPATH="$TMPDIR/go"
       export GOSUMDB=off
@@ -111,16 +113,30 @@ let
 
       rm -rf vendor
       cp -r --reflink=auto ${go-modules} vendor
+
+      runHook postConfigure
     '';
     buildPhase = ''
+      runHook preBuild
+
       redo -j$NIX_BUILD_CORES nixcached
+
+      runHook postBuild
     '';
     installPhase = ''
+      runHook preInstall
+
       mkdir -p "$out/bin"
       cp nixcached "$out/bin"
+
+      runHook postInstall
     '';
     checkPhase = ''
+      runHook preCheck
+
       redo -j$NIX_BUILD_CORES test
+
+      runHook postCheck
     '';
 
     inherit passthru meta;

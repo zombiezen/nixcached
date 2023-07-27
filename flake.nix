@@ -98,8 +98,10 @@
       };
 
       lib.mkNixcached = pkgs: pkgs.callPackage ./package.nix {
-        go = pkgs.go_1_20;
-        sass = pkgs.dart-sass;
+        git = pkgs.pkgsBuildBuild.git;
+        go = pkgs.pkgsBuildHost.go_1_20;
+        redo-apenwarr = pkgs.pkgsBuildBuild.redo-apenwarr;
+        sass = pkgs.pkgsBuildBuild.dart-sass;
       };
 
       lib.mkDocker =
@@ -110,7 +112,7 @@
         let
           nixcached = self.lib.mkNixcached pkgs;
         in
-          pkgs.dockerTools.buildImage {
+          (pkgs.dockerTools.buildImage {
             inherit name;
             tag = if builtins.isNull tag then nixcached.version else tag;
 
@@ -131,6 +133,7 @@
                 "org.opencontainers.image.version" = nixcached.version;
               };
             };
-          };
+
+          }).overrideAttrs (previous: { passthru = previous.passthru // { inherit nixcached; }; });
     };
 }
