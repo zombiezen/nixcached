@@ -36,6 +36,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coreos/go-systemd/v22/activation"
 	"github.com/gorilla/handlers"
 	"github.com/spf13/cobra"
 	"zombiezen.com/go/bass/accept"
@@ -59,9 +60,10 @@ func newServeCommand(g *globalConfig) *cobra.Command {
 		DisableFlagsInUseLine: true,
 	}
 	host := c.Flags().String("host", "localhost", "`interface` to listen on")
-	port := c.Flags().Uint16P("port", "p", 8080, "`port` to listen on")
+	port := c.Flags().Uint16P("port", "p", 38380, "`port` to listen on")
 	client := c.Flags().String("client", "", "`path` to client resource files (defaults to using embedded files)")
 	maxListFrequency := c.Flags().Duration("max-list-frequency", 2*time.Minute, "minimum `duration` of time between starting listings")
+	systemdSocket := c.Flags().Bool("systemd", false, "use systemd socket activation")
 	c.RunE = func(cmd *cobra.Command, args []string) error {
 		listenAddr := net.JoinHostPort(*host, strconv.Itoa(int(*port)))
 		var resourcesFS fs.FS
@@ -74,12 +76,12 @@ func newServeCommand(g *globalConfig) *cobra.Command {
 				return err
 			}
 		}
-		return runServe(cmd.Context(), g, listenAddr, resourcesFS, args[0], *maxListFrequency)
+		return runServe(cmd.Context(), g, listenAddr, *systemdSocket, resourcesFS, args[0], *maxListFrequency)
 	}
 	return c
 }
 
-func runServe(ctx context.Context, g *globalConfig, listenAddr string, resources fs.FS, src string, maxListFrequency time.Duration) error {
+func runServe(ctx context.Context, g *globalConfig, listenAddr string, systemdSocket bool, resources fs.FS, src string, maxListFrequency time.Duration) error {
 	tempDir, err := os.MkdirTemp("", "nixcached-serve-*")
 	if err != nil {
 		return err
@@ -91,6 +93,7 @@ func runServe(ctx context.Context, g *globalConfig, listenAddr string, resources
 			log.Warnf(ctx, "Clean up: %v", err)
 		}
 	}()
+
 	cachePool := sqlitemigration.NewPool(filepath.Join(tempDir, "cache.db"), uiCacheSchema(), sqlitemigration.Options{
 		OnStartMigrate: func() {
 			log.Debugf(ctx, "Cache database migration starting...")
@@ -155,7 +158,7 @@ func runServe(ctx context.Context, g *globalConfig, listenAddr string, resources
 			return ctx
 		},
 	}
-	return runhttp.Serve(ctx, hsrv, &runhttp.Options{
+	runOptions := &runhttp.Options{
 		OnStartup: func(ctx context.Context, laddr net.Addr) {
 			if tcpAddr, ok := laddr.(*net.TCPAddr); ok && tcpAddr.IP.IsLoopback() {
 				log.Infof(ctx, "Listening on http://localhost:%d/", tcpAddr.Port)
@@ -169,7 +172,18 @@ func runServe(ctx context.Context, g *globalConfig, listenAddr string, resources
 		OnShutdownError: func(ctx context.Context, err error) {
 			log.Errorf(ctx, "Shutdown error: %v", err)
 		},
-	})
+	}
+	if systemdSocket {
+		listeners, err := activation.Listeners()
+		if err != nil {
+			return err
+		}
+		if len(listeners) != 1 {
+			return fmt.Errorf("systemd passed in %d sockets (want 1)", len(listeners))
+		}
+		runOptions.Listener = listeners[0]
+	}
+	return runhttp.Serve(ctx, hsrv, runOptions)
 }
 
 //go:embed client/dist

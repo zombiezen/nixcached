@@ -41,13 +41,23 @@
                 services.nixcached.upload = {
                   enable = true;
                   bucketURL = "s3://nix-cache";
+                  postBuildHook = true;
+                };
+                services.nixcached.serve = {
+                  enable = true;
+                  store = "s3://nix-cache";
                 };
                 system.stateVersion = "23.11";
               }) etc;
             in
               pkgs.runCommandLocal "nixcached-systemd-example" {} ''
-                mkdir -p "$out/etc/systemd/system"
+                mkdir -p "$out/etc/nix" "$out/etc/systemd/system"
                 cp --reflink=auto \
+                  ${etc}/etc/nix/nix.conf \
+                  "$out/etc/nix/"
+                cp --reflink=auto \
+                  ${etc}/etc/systemd/system/nixcached-serve.service \
+                  ${etc}/etc/systemd/system/nixcached-serve.socket \
                   ${etc}/etc/systemd/system/nixcached-upload.service \
                   ${etc}/etc/systemd/system/nixcached-upload.socket \
                   "$out/etc/systemd/system/"

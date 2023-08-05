@@ -17,7 +17,7 @@ let
   pname = "nixcached";
   version = "0.2.0";
 
-  vendorHash = "sha256-13ZDO4rXYgTRsyXda9RpHvDVXpfNc6UArXznLOh78mE=";
+  vendorHash = "sha256-6I0BalIcoj0jwsmFjh7bdgdn3tG1YzfUcgHdx06CfpQ=";
 
   passthru = {
     inherit go go-modules sass vendorHash xz;

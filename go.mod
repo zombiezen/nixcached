@@ -3,6 +3,7 @@ module zombiezen.com/go/nixcached
 go 1.20
 
 require (
+	github.com/coreos/go-systemd/v22 v22.5.0
 	github.com/dsnet/compress v0.0.1
 	github.com/gorilla/handlers v1.5.1
 	github.com/spf13/cobra v1.7.0

@@ -30,6 +30,32 @@
         default = "0666";
         description = lib.mdDoc "Permissions of the socket.";
       };
+      postBuildHook = mkOption {
+        type = lib.types.bool;
+        default = false;
+        example = true;
+        description = lib.mdDoc "Whether to send Nix-built store paths to this service.";
+      };
+    };
+
+    serve = {
+      enable = lib.mkEnableOption (lib.mdDoc "nixcached serve");
+      store = mkOption {
+        type = lib.types.str;
+        example = lib.literalExpression "\"s3://example-bucket\"";
+        description = lib.mdDoc "URL of Nix store to proxy.";
+      };
+      port = mkOption {
+        type = lib.types.port;
+        default = 38380;
+        description = lib.mdDoc "Port to serve HTTP on.";
+      };
+      useAsSubstituter = mkOption {
+        type = lib.types.bool;
+        default = true;
+        example = false;
+        description = lib.mdDoc "Whether to use the server as a substituter for the system.";
+      };
     };
   };
 
@@ -47,7 +73,7 @@
 
         requires = [
           "local-fs.target"
-          "nixcache-upload.socket"
+          "nixcached-upload.socket"
         ];
         wants = [
           "network-online.target"
@@ -55,7 +81,7 @@
         after = [
           "local-fs.target"
           "network-online.target"
-          "nixcache-upload.socket"
+          "nixcached-upload.socket"
         ];
 
         serviceConfig.StandardInput = "socket";
@@ -69,6 +95,56 @@
 
       # Install nixcached globally so users can run `nixcached send`.
       environment.systemPackages = [ cfg.package ];
+    })
+
+    (lib.mkIf (cfg.upload.enable && cfg.upload.postBuildHook) {
+      nix.extraOptions = let
+        hook = pkgs.writeShellScriptBin "nixcached-post-build-hook" ''
+          ${cfg.package}/bin/nixcached send -o /run/nixcached-upload $OUT_PATHS
+        '';
+      in ''
+        post-build-hook = ${hook}/bin/nixcached-post-build-hook
+      '';
+    })
+
+    (lib.mkIf cfg.serve.enable {
+      systemd.sockets.nixcached-serve = {
+        description = "nixcached serve HTTP";
+        listenStreams = [ "127.0.0.1:${builtins.toString cfg.serve.port}" ];
+        wantedBy = [ "sockets.target" ];
+      };
+
+      systemd.services.nixcached-serve = {
+        description = "nixcached serve";
+
+        requires = [
+          "nixcached-serve.socket"
+        ];
+        wants = [
+          "local-fs.target"
+          "network-online.target"
+        ];
+        after = [
+          "local-fs.target"
+          "network-online.target"
+          "nixcached-serve.socket"
+        ];
+
+        serviceConfig.Sockets = [ "nixcached-serve.socket" ];
+
+        environment.SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+
+        path = [ cfg.package ];
+        script = ''
+          exec nixcached serve --systemd ${cfg.serve.store}
+        '';
+      };
+    })
+
+    (lib.mkIf (cfg.serve.enable && cfg.serve.useAsSubstituter) {
+      nix.settings.substituters = [
+        "http://localhost:${builtins.toString cfg.serve.port}"
+      ];
     })
   ];
 }

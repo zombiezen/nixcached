@@ -13,6 +13,19 @@ and this project adheres to [Semantic Versioning][].
 
 - Uploads are now performed concurrently, defaulting to two at a time.
   The number can be tuned with the `upload --jobs` flag.
+- The NixOS module now includes a `services.nixcached.serve` option set
+  that configures a `nixcached serve` systemd service.
+  This service can optionally be used as a system-wide substituter.
+- The NixOS module includes a `services.nixcached.upload.postBuildHook` option
+  that provides a minimal shell script to trigger uploads as a
+  [Nix post-build hook](https://nixos.org/manual/nix/stable/advanced-topics/post-build-hook.html).
+- `serve --systemd` allows the server to be run with
+  [systemd socket activation](https://0pointer.de/blog/projects/socket-activation.html).
+
+### Fixed
+
+- The dependencies in the `nixcached-upload.service` from the NixOS module
+  are now correctly specified.
 
 ## [0.1.1][] - 2023-07-27
 
