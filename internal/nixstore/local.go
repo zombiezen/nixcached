@@ -194,11 +194,14 @@ func (l *Local) queryPathFromHashPart(ctx context.Context, storePathDigest strin
 
 // Download dumps the store object as an uncompressed NAR archive.
 func (l *Local) Download(ctx context.Context, w io.Writer, u *url.URL) error {
-	// TODO(soon): Limit paths to store directory.
 	if u.Scheme != "file" || u.Opaque != "" || !(u.Host == "" || u.Host == "localhost") || u.Fragment != "" || u.RawQuery != "" || u.Path == "" {
 		return fmt.Errorf("download nar %v: %w", u, ErrNotFound)
 	}
-	return nar.DumpPath(w, u.Path)
+	storePath, sub, err := l.dir().ParsePath(u.Path)
+	if err != nil || sub != "" {
+		return fmt.Errorf("download nar %v: %w", u, ErrNotFound)
+	}
+	return nar.DumpPath(w, string(storePath))
 }
 
 // Query retrieves information about zero or more store objects.
