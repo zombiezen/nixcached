@@ -59,6 +59,8 @@ func newUploadCommand(g *globalConfig) *cobra.Command {
 	}
 	compression := c.Flags().String("compression", string(defaultCompression), "compression `algorithm` to use (one of "+supportedCompressionTypes()+")")
 	c.Flags().BoolVar(&opts.createListings, "write-nar-listing", true, "whether to write a JSON file that lists the files in each NAR")
+	c.Flags().IntVarP(&opts.concurrency, "jobs", "j", 2, "number of upload `jobs` to perform simultaneously")
+
 	c.RunE = func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		opts.compression = nix.CompressionType(*compression)
@@ -94,6 +96,7 @@ type uploadOptions struct {
 	overwrite      bool
 	createListings bool
 	compression    nix.CompressionType
+	concurrency    int
 }
 
 func runUpload(ctx context.Context, g *globalConfig, destinationBucketURL string, input io.Reader, storeDir nix.StoreDirectory, opts *uploadOptions) error {
@@ -213,6 +216,13 @@ func ensureCacheInfo(ctx context.Context, bucket *blob.Bucket, localStoreDir nix
 // It is assumed that the store paths have been validated before being sent on the channel.
 func processUploads(ctx context.Context, storeClient *nixstore.Local, destination *blob.Bucket, opts *uploadOptions, storePaths <-chan nix.StorePath) {
 	storePathBatch := make([]nix.StorePath, 0, 100)
+	sem := make(chan struct{}, opts.concurrency)
+	defer func() {
+		// Wait for all jobs to complete.
+		for i := 0; i < cap(sem); i++ {
+			sem <- struct{}{}
+		}
+	}()
 
 	for {
 		storePathBatch = storePathBatch[:0]
@@ -247,12 +257,19 @@ func processUploads(ctx context.Context, storeClient *nixstore.Local, destinatio
 		log.Debugf(ctx, "Have batch: %q", storePathBatch)
 		set := gatherStorePathSet(ctx, storeClient, storePathBatch)
 
-		// TODO(soon): Make concurrent.
 		for _, info := range set {
-			log.Infof(ctx, "Uploading %s...", info.StorePath)
-			if err := uploadStorePath(ctx, storeClient, destination, info, opts); err != nil {
-				log.Errorf(ctx, "Failed: %v", err)
-				continue
+			select {
+			case sem <- struct{}{}:
+				info := info
+				go func() {
+					log.Infof(ctx, "Uploading %s...", info.StorePath)
+					if err := uploadStorePath(ctx, storeClient, destination, info, opts); err != nil {
+						log.Errorf(ctx, "Failed: %v", err)
+					}
+					<-sem
+				}()
+			case <-ctx.Done():
+				return
 			}
 		}
 	}

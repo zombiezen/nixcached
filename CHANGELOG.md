@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning][].
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
 [Unreleased]: https://github.com/zombiezen/nixcached/compare/v0.1.1...HEAD
 
+## [Unreleased][]
+
+### Added
+
+- Uploads are now performed concurrently, defaulting to two at a time.
+  The number can be tuned with the `upload --jobs` flag.
+
 ## [0.1.1][] - 2023-07-27
 
 Version 0.1.1 has no changes from 0.1.0
