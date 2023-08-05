@@ -51,8 +51,8 @@ import (
 
 func newServeCommand(g *globalConfig) *cobra.Command {
 	c := &cobra.Command{
-		Use:                   "serve [flags] URL",
-		Short:                 "Run an HTTP server for a bucket",
+		Use:                   "serve [flags] STORE_URL",
+		Short:                 "Run an HTTP server for a store",
 		Args:                  cobra.ExactArgs(1),
 		SilenceErrors:         true,
 		SilenceUsage:          true,
