@@ -34,6 +34,25 @@
         packages = {
           default = self.lib.mkNixcached pkgs;
 
+          ci = pkgs.linkFarm "nixcached-ci" (
+            [
+              { name = "nixcached"; path = self.packages.${system}.default; }
+            ] ++ pkgs.lib.lists.optional (self.packages.${system} ? docker-amd64) {
+              name = "docker-image-nixcached-amd64.tar.gz";
+              path = self.packages.${system}.docker-amd64;
+            } ++ pkgs.lib.lists.optional (self.packages.${system} ? docker-arm64) {
+              name = "docker-image-nixcached-arm64.tar.gz";
+              path = self.packages.${system}.docker-arm64;
+            }
+          );
+        } // pkgs.lib.optionalAttrs pkgs.hostPlatform.isLinux {
+          docker-amd64 = self.lib.mkDocker {
+            pkgs = (self.lib.pkgsCross system).linux-amd64;
+          };
+          docker-arm64 = self.lib.mkDocker {
+            pkgs = (self.lib.pkgsCross system).linux-arm64;
+          };
+
           systemd-example =
             let
               inherit (pkgs.nixos {
@@ -62,31 +81,16 @@
                   ${etc}/etc/systemd/system/nixcached-upload.socket \
                   "$out/etc/systemd/system/"
               '';
-
-          ci = pkgs.linkFarm "nixcached-ci" (
-            [
-              { name = "nixcached"; path = self.packages.${system}.default; }
-              { name = "nixcached-tests/version"; path = self.packages.${system}.default.tests.version; }
-            ] ++ pkgs.lib.lists.optional (self.packages.${system} ? docker-amd64) {
-              name = "docker-image-nixcached-amd64.tar.gz";
-              path = self.packages.${system}.docker-amd64;
-            } ++ pkgs.lib.lists.optional (self.packages.${system} ? docker-arm64) {
-              name = "docker-image-nixcached-arm64.tar.gz";
-              path = self.packages.${system}.docker-arm64;
-            }
-          );
-        } // pkgs.lib.optionalAttrs pkgs.hostPlatform.isLinux {
-          docker-amd64 = self.lib.mkDocker {
-            pkgs = (self.lib.pkgsCross system).linux-amd64;
-          };
-          docker-arm64 = self.lib.mkDocker {
-            pkgs = (self.lib.pkgsCross system).linux-arm64;
-          };
         };
 
         apps.default = {
           type = "app";
           program = "${self.packages.${system}.default}/bin/nixcached";
+        };
+
+        checks = {
+          nixcached = self.packages.${system}.default;
+          nixcached-version = self.packages.${system}.default.tests.version;
         };
 
         devShells.default = pkgs.mkShell {

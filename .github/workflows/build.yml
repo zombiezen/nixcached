@@ -38,6 +38,7 @@ jobs:
       - id: build
         name: Build and test
         run: |
+          nix flake check
           nix build '.#ci'
           echo "result=$(readlink -f result)" >> "$GITHUB_OUTPUT"
       - name: Upload Docker images
