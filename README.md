@@ -60,6 +60,8 @@ nixcached serve --port=8080 s3://nix-cache
 nixcached serve --port=8080 s3://mybucket?endpoint=minio.example.com:8080&disableSSL=true&s3ForcePathStyle=true
 # Google Cloud Storage (GCS)
 nixcached serve --port=8080 gs://nix-cache
+# Remote Nix store
+nixcached serve --port=8080 ssh://example.com
 ```
 
 ## Upload Pipeline

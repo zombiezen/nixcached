@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning][].
   [Nix post-build hook](https://nixos.org/manual/nix/stable/advanced-topics/post-build-hook.html).
 - `serve --systemd` allows the server to be run with
   [systemd socket activation](https://0pointer.de/blog/projects/socket-activation.html).
+- `serve` can now handle `ssh://` URLs.
 
 ### Fixed
 

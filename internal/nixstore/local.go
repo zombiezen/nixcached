@@ -46,7 +46,7 @@ type Local struct {
 	// Directory is the store directory.
 	// If empty, then [nix.DefaultStoreDirectory] is used.
 	Directory nix.StoreDirectory
-	// Executable is the path to the nix CLI that the client will use.
+	// Executable is the path to the nix CLI to be used.
 	// If empty, then "nix" is searched on the user's PATH.
 	Executable string
 	// Log is used to write the standard error stream from any CLI invocations.
@@ -95,7 +95,7 @@ func (l *Local) NARInfo(ctx context.Context, storePathDigest string) (*nix.NARIn
 	if err != nil {
 		return nil, fmt.Errorf("read nar info for %s: %w", storePathDigest, ErrNotFound)
 	}
-	infos, err := l.pathInfo(ctx, storePath.IsDerivation(), false, []string{string(storePath)})
+	infos, err := pathInfoFromCLI(ctx, l.newCommand, storePath.IsDerivation(), false, []string{string(storePath)})
 	if err != nil {
 		return nil, fmt.Errorf("read nar info for %s: %v", storePathDigest, err)
 	}
@@ -105,10 +105,7 @@ func (l *Local) NARInfo(ctx context.Context, storePathDigest string) (*nix.NARIn
 	if len(infos) == 0 || infos[0].NARHash.IsZero() {
 		return nil, fmt.Errorf("read nar info for %s: %w", storePathDigest, ErrNotFound)
 	}
-	infos[0].URL = (&url.URL{
-		Scheme: "file",
-		Path:   string(storePath),
-	}).String()
+	l.setInfoURL(infos[0])
 	return infos[0], nil
 }
 
@@ -124,10 +121,8 @@ func (l *Local) BatchNARInfo(ctx context.Context, storePathDigests []string) ([]
 	outputs := make([]string, 0, len(storePathDigests))
 	derivations := make([]string, 0, len(storePathDigests))
 	for _, digest := range storePathDigests {
-		i := sort.Search(len(entries), func(i int) bool { return entries[i].Name() >= digest })
-		p, err := storeDir.Object(entries[i].Name())
-		if err != nil || p.Digest() != digest {
-			// TODO(now): Advance through more entries?
+		p, err := queryPathFromHashPart(storeDir, entries, true, digest)
+		if err != nil {
 			continue
 		}
 		if p.IsDerivation() {
@@ -136,9 +131,23 @@ func (l *Local) BatchNARInfo(ctx context.Context, storePathDigests []string) ([]
 			outputs = append(outputs, string(p))
 		}
 	}
+	infos, err := batchNARInfoFromCLI(ctx, l.newCommand, outputs, derivations)
+	for _, info := range infos {
+		l.setInfoURL(info)
+	}
+	return infos, err
+}
 
-	result := make([]*nix.NARInfo, 0, len(storePathDigests))
-	outputInfos, err := l.pathInfo(ctx, false, false, outputs)
+func (l *Local) setInfoURL(info *nix.NARInfo) {
+	info.URL = (&url.URL{
+		Scheme: "file",
+		Path:   string(info.StorePath),
+	}).String()
+}
+
+func batchNARInfoFromCLI(ctx context.Context, f nixCommandFactory, outputs, derivations []string) ([]*nix.NARInfo, error) {
+	result := make([]*nix.NARInfo, 0, len(outputs)+len(derivations))
+	outputInfos, err := pathInfoFromCLI(ctx, f, false, false, outputs)
 	if err != nil {
 		return nil, fmt.Errorf("read nar info: %v", err)
 	}
@@ -146,13 +155,9 @@ func (l *Local) BatchNARInfo(ctx context.Context, storePathDigests []string) ([]
 		if info.NARHash.IsZero() {
 			continue
 		}
-		info.URL = (&url.URL{
-			Scheme: "file",
-			Path:   string(info.StorePath),
-		}).String()
 		result = append(result, info)
 	}
-	derivationInfos, err := l.pathInfo(ctx, true, false, derivations)
+	derivationInfos, err := pathInfoFromCLI(ctx, f, true, false, derivations)
 	if err != nil {
 		return nil, fmt.Errorf("read nar info: %v", err)
 	}
@@ -160,10 +165,6 @@ func (l *Local) BatchNARInfo(ctx context.Context, storePathDigests []string) ([]
 		if info.NARHash.IsZero() {
 			continue
 		}
-		info.URL = (&url.URL{
-			Scheme: "file",
-			Path:   string(info.StorePath),
-		}).String()
 		result = append(result, info)
 	}
 	return result, nil
@@ -185,13 +186,29 @@ func (l *Local) queryPathFromHashPart(ctx context.Context, storePathDigest strin
 			}
 			return "", fmt.Errorf("query nix store path from hash part %q: %v", storePathDigest, err)
 		}
-		for _, ent := range entries {
-			p, err := storeDir.Object(ent.Name())
-			if err == nil && p.Digest() == storePathDigest {
-				return p, nil
-			}
+		if p, err := queryPathFromHashPart(storeDir, entries, false, storePathDigest); err == nil {
+			return p, nil
 		}
 	}
+}
+
+func queryPathFromHashPart(storeDir nix.StoreDirectory, entries []fs.DirEntry, sorted bool, storePathDigest string) (nix.StorePath, error) {
+	if sorted {
+		start := sort.Search(len(entries), func(i int) bool { return entries[i].Name() >= storePathDigest })
+		end := start
+		for end < len(entries) && strings.HasPrefix(entries[end].Name(), storePathDigest) {
+			end++
+		}
+		entries = entries[start:end]
+	}
+
+	for _, ent := range entries {
+		p, err := storeDir.Object(ent.Name())
+		if err == nil && p.Digest() == storePathDigest {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("query nix store path from hash part %q: %w", storePathDigest, ErrNotFound)
 }
 
 // Download dumps the store object as an uncompressed NAR archive.
@@ -212,7 +229,7 @@ func (l *Local) Download(ctx context.Context, w io.Writer, u *url.URL) error {
 // but [NARInfo.IsZero] will report true.
 // If zero installables are given, then Query returns (nil, nil).
 func (l *Local) Query(ctx context.Context, installables ...string) ([]*nix.NARInfo, error) {
-	return l.pathInfo(ctx, false, false, installables)
+	return pathInfoFromCLI(ctx, l.newCommand, false, false, installables)
 }
 
 // QueryRecursive retrieves information about
@@ -223,10 +240,22 @@ func (l *Local) Query(ctx context.Context, installables ...string) ([]*nix.NARIn
 // but [NARHash.IsZero] will report true.
 // If zero installables are given, then QueryRecursive returns (nil, nil).
 func (l *Local) QueryRecursive(ctx context.Context, installables ...string) ([]*nix.NARInfo, error) {
-	return l.pathInfo(ctx, false, true, installables)
+	return pathInfoFromCLI(ctx, l.newCommand, false, true, installables)
 }
 
-func (l *Local) pathInfo(ctx context.Context, derivation bool, recursive bool, installables []string) ([]*nix.NARInfo, error) {
+type nixCommandFactory func(ctx context.Context, args []string) *exec.Cmd
+
+func (l *Local) newCommand(ctx context.Context, args []string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, l.exe(), args...)
+	cmd.Env = append(os.Environ(), "NIX_STORE_DIR="+string(l.dir()))
+	cmd.Cancel = func() error {
+		return cmd.Process.Signal(unix.SIGTERM)
+	}
+	cmd.Stderr = l.Log
+	return cmd
+}
+
+func pathInfoFromCLI(ctx context.Context, f nixCommandFactory, derivation bool, recursive bool, installables []string) ([]*nix.NARInfo, error) {
 	if len(installables) == 0 {
 		return nil, nil
 	}
@@ -243,14 +272,9 @@ func (l *Local) pathInfo(ctx context.Context, derivation bool, recursive bool, i
 	}
 	args = append(args, "--")
 	args = append(args, installables...)
-	cmd := exec.CommandContext(ctx, l.exe(), args...)
-	cmd.Env = append(os.Environ(), "NIX_STORE_DIR="+string(l.dir()))
-	cmd.Cancel = func() error {
-		return cmd.Process.Signal(unix.SIGTERM)
-	}
+	cmd := f(ctx, args)
 	out := new(bytes.Buffer)
 	cmd.Stdout = out
-	cmd.Stderr = l.Log
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("query nix store paths %s: %v", strings.Join(installables, " "), err)
 	}

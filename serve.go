@@ -118,6 +118,23 @@ func runServe(ctx context.Context, g *globalConfig, listenAddr string, systemdSo
 			return err
 		}
 		store = &nixstore.Local{Directory: dir}
+	} else if strings.HasPrefix(src, "ssh://") {
+		u, err := url.Parse(src)
+		if err != nil {
+			return err
+		}
+		sshStore := &nixstore.SSH{
+			Host:          u.Host,
+			Username:      u.User.Username(),
+			SSHExecutable: os.Getenv("SSH"),
+		}
+		if u.Path != "" && u.Path != "/" {
+			sshStore.Directory, err = nix.CleanStoreDirectory(u.Path)
+			if err != nil {
+				return err
+			}
+		}
+		store = sshStore
 	} else {
 		opener, err := newBucketURLOpener(ctx)
 		if err != nil {
