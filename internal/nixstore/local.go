@@ -112,6 +112,8 @@ func (l *Local) NARInfo(ctx context.Context, storePathDigest string) (*nix.NARIn
 	return infos[0], nil
 }
 
+// BatchNARInfo invokes the Nix CLI to return information
+// about the store objects with the given digests.
 func (l *Local) BatchNARInfo(ctx context.Context, storePathDigests []string) ([]*nix.NARInfo, error) {
 	storeDir := l.dir()
 	entries, err := os.ReadDir(string(storeDir))

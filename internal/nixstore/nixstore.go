@@ -23,7 +23,9 @@ import (
 	"io"
 	"net/url"
 	"strings"
+	"sync"
 
+	"golang.org/x/sync/errgroup"
 	"zombiezen.com/go/nix"
 )
 
@@ -45,31 +47,57 @@ type Store interface {
 	Download(ctx context.Context, w io.Writer, u *url.URL) error
 }
 
+// BatchNARInfoStore is a store that can efficiently query for multiple metadata
+// in a single request.
+// If a digest is not found in the store,
+// then it will not be present in the resulting list
+// but BatchNARInfo will not return an error.
 type BatchNARInfoStore interface {
 	Store
 
 	BatchNARInfo(ctx context.Context, storePathDigests []string) ([]*nix.NARInfo, error)
 }
 
-func BatchNARInfo(ctx context.Context, store Store, storePathDigests []string) ([]*nix.NARInfo, error) {
+// BatchNARInfo retrieves zero or more store object metadata.
+// If the store implements [BatchNARInfoStore], then the BatchNARInfo method will be used.
+// Otherwise, the metadata will be fetched using many calls to [Store.NARInfo]
+// with at most maxConcurrency called concurrently.
+func BatchNARInfo(ctx context.Context, store Store, storePathDigests []string, maxConcurrency int) ([]*nix.NARInfo, error) {
+	if maxConcurrency < 1 {
+		return nil, errors.New("read nar info: non-positive concurrency")
+	}
 	if len(storePathDigests) == 0 {
 		return nil, nil
 	}
 	if b, ok := store.(BatchNARInfoStore); ok {
 		return b.BatchNARInfo(ctx, storePathDigests)
 	}
+
+	grp, grpCtx := errgroup.WithContext(ctx)
+	grp.SetLimit(maxConcurrency)
+
+	var mu sync.Mutex
 	result := make([]*nix.NARInfo, 0, len(storePathDigests))
 	for _, digest := range storePathDigests {
-		info, err := store.NARInfo(ctx, digest)
-		if errors.Is(err, ErrNotFound) {
-			continue
-		}
-		if err != nil {
-			return result, err
-		}
-		result = append(result, info)
+		digest := digest
+		grp.Go(func() error {
+			info, err := store.NARInfo(grpCtx, digest)
+			if errors.Is(err, ErrNotFound) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+
+			mu.Lock()
+			result = append(result, info)
+			mu.Unlock()
+			return nil
+		})
 	}
-	return result, nil
+
+	err := grp.Wait()
+	return result, err
 }
 
 // ErrNotFound is the error returned by various [Store] methods

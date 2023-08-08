@@ -453,7 +453,7 @@ func (c uiCacheConn) discover(ctx context.Context) int64 {
 			break
 		}
 		log.Debugf(ctx, "Requesting discovery info for %d store objects...", len(batchDigests))
-		batch, err := nixstore.BatchNARInfo(ctx, c.store, batchDigests)
+		batch, err := nixstore.BatchNARInfo(ctx, c.store, batchDigests, 3)
 		if err != nil {
 			log.Warnf(ctx, "%v", err)
 		}
