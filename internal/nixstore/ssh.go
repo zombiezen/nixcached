@@ -17,6 +17,7 @@
 package nixstore
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -52,6 +53,9 @@ type SSH struct {
 	// Executable is the path to the nix CLI on the remote that will be used.
 	// If empty, then "nix" is searched on the user's PATH.
 	Executable string
+	// StoreExecutable is the path to the nix-store CLI on the remote that will be used.
+	// If empty, then "nix-store" is searched on the user's PATH.
+	StoreExecutable string
 	// Log is used to write the standard error stream from any CLI invocations.
 	// A nil Log will discard logs.
 	Log io.Writer
@@ -64,11 +68,18 @@ func (s *SSH) sshExe() string {
 	return s.SSHExecutable
 }
 
-func (s *SSH) exe() string {
+func (s *SSH) nixExe() string {
 	if s.Executable == "" {
 		return "nix"
 	}
 	return s.Executable
+}
+
+func (s *SSH) nixStoreExe() string {
+	if s.StoreExecutable == "" {
+		return "nix-store"
+	}
+	return s.StoreExecutable
 }
 
 func (s *SSH) remoteURL(path string) *url.URL {
@@ -212,7 +223,7 @@ func (s *SSH) BatchNARInfo(ctx context.Context, storePathDigests []string) ([]*n
 			outputs = append(outputs, string(p))
 		}
 	}
-	infos, err := batchNARInfoFromCLI(ctx, s.newCommand, outputs, derivations)
+	infos, err := batchNARInfoFromCLI(ctx, s.newNixCommand, outputs, derivations)
 	for _, info := range infos {
 		s.setInfoURL(info)
 	}
@@ -233,9 +244,8 @@ func (s *SSH) Download(ctx context.Context, w io.Writer, u *url.URL) error {
 	if err != nil || sub != "" {
 		return fmt.Errorf("download nar %v: %w", u, ErrNotFound)
 	}
-	cmd := s.newCommand(ctx, []string{
-		"--extra-experimental-features", "nix-command",
-		"nar", "dump-path", "--", string(storePath),
+	cmd := s.newNixStoreCommand(ctx, []string{
+		"--dump", "--", string(storePath),
 	})
 	cmd.Stdout = w
 	if err := cmd.Run(); err != nil {
@@ -244,12 +254,20 @@ func (s *SSH) Download(ctx context.Context, w io.Writer, u *url.URL) error {
 	return nil
 }
 
-func (s *SSH) newCommand(ctx context.Context, args []string) *exec.Cmd {
+func (s *SSH) newNixCommand(ctx context.Context, args []string) *exec.Cmd {
+	return s.newCommand(ctx, s.nixExe(), args)
+}
+
+func (s *SSH) newNixStoreCommand(ctx context.Context, args []string) *exec.Cmd {
+	return s.newCommand(ctx, s.nixStoreExe(), args)
+}
+
+func (s *SSH) newCommand(ctx context.Context, exe string, args []string) *exec.Cmd {
 	commandArg := new(strings.Builder)
 	commandArg.WriteString("NIX_STORE_DIR=")
 	shellEscape(commandArg, string(s.dir()))
 	commandArg.WriteString(" ")
-	shellEscape(commandArg, s.exe())
+	shellEscape(commandArg, exe)
 	for _, arg := range args {
 		commandArg.WriteString(" ")
 		shellEscape(commandArg, arg)
@@ -261,6 +279,35 @@ func (s *SSH) newCommand(ctx context.Context, args []string) *exec.Cmd {
 	}
 	cmd.Stderr = s.Log
 	return cmd
+}
+
+// Upload uploads zero or more objects to the remote store.
+func (s *SSH) Upload(ctx context.Context, objects []*ExportEntry) error {
+	if len(objects) == 0 {
+		return nil
+	}
+	// TODO(maybe): Pipe through gunzip.
+	cmd := s.newNixStoreCommand(ctx, []string{"--import"})
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("upload to nix store %v: %v", s.remoteURL(""), err)
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("upload to nix store %v: %v", s.remoteURL(""), err)
+	}
+
+	w := bufio.NewWriter(stdin)
+	var errors [4]error
+	errors[0] = export(w, objects)
+	errors[1] = w.Flush()
+	errors[2] = stdin.Close()
+	errors[3] = cmd.Wait()
+	for _, err := range errors {
+		if err != nil {
+			return fmt.Errorf("upload to nix store %v: %v", s.remoteURL(""), err)
+		}
+	}
+	return nil
 }
 
 type memoryListIterator struct {
