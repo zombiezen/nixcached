@@ -85,11 +85,13 @@
         ];
 
         serviceConfig.StandardInput = "socket";
+        serviceConfig.KillMode = "mixed";
+        serviceConfig.KillSignal = "SIGHUP";
         environment.SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
 
         path = [ cfg.package ];
         script = ''
-          exec nixcached upload --input ${cfg.upload.bucketURL}
+          exec nixcached upload ${lib.strings.escapeShellArg cfg.upload.bucketURL}
         '';
       };
 
