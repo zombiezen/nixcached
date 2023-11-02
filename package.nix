@@ -9,7 +9,7 @@
 , git
 , go
 , redo-apenwarr
-, sass
+, tailwindcss
 , xz
 }:
 
@@ -20,7 +20,7 @@ let
   vendorHash = "sha256-i00VNRzTq8pJSItlkAIMpC8Zr18FzIMyN4lLUGr3bp0=";
 
   passthru = {
-    inherit go go-modules sass vendorHash xz;
+    inherit go go-modules tailwindcss vendorHash xz;
     redo = redo-apenwarr;
 
     tests.version = testers.testVersion {
@@ -86,7 +86,7 @@ let
     nativeBuildInputs = [
       go
       redo-apenwarr
-      sass
+      tailwindcss
     ];
 
     inherit (go) GOOS GOARCH CGO_ENABLED;

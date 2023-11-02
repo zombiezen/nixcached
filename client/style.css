@@ -1,0 +1,9 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer components {
+  .nixcached-link {
+    @apply text-blue-700 underline visited:text-purple-700 dark:text-blue-500 dark:visited:text-purple-500;
+  }
+}

@@ -3,83 +3,83 @@
 {{- end }}
 
 {{ define "body" -}}
-  <h1>{{ .StorePath.Base }}</h1>
-  <table class="NARInfo">
+  <h1 class="text-3xl font-bold">{{ .StorePath.Base }}</h1>
+  <table class="my-6">
     <tbody>
-      <tr class="NARInfo-line">
-        <th scope="row" class="NARInfo-key">StorePath:</th>
-        <td class="NARInfo-value">
+      <tr>
+        <th scope="row" class="pe-3 py-1 font-bold text-left align-top leading-none">StorePath:</th>
+        <td class="pb-1 font-mono text-base align-top">
           {{- .StorePath -}}
         </td>
       </tr>
-      <tr class="NARInfo-line">
-        <th scope="row" class="NARInfo-key">URL:</th>
-        <td class="NARInfo-value">
-          <a href="/{{ .URL }}">{{ .URL }}</a>
+      <tr>
+        <th scope="row" class="pe-3 py-1 font-bold text-left align-top leading-none">URL:</th>
+        <td class="pb-1 font-mono text-base align-top">
+          <a href="/{{ .URL }}" class="nixcached-link">{{ .URL }}</a>
         </td>
       </tr>
-      <tr class="NARInfo-line">
-        <th scope="row" class="NARInfo-key">Compression:</th>
-        <td class="NARInfo-value">
+      <tr>
+        <th scope="row" class="pe-3 py-1 font-bold text-left align-top leading-none">Compression:</th>
+        <td class="pb-1 font-mono text-base align-top">
           {{- .Compression -}}
         </td>
       </tr>
-      <tr class="NARInfo-line">
-        <th scope="row" class="NARInfo-key">FileHash:</th>
-        <td class="NARInfo-value">
+      <tr>
+        <th scope="row" class="pe-3 py-1 font-bold text-left align-top leading-none">FileHash:</th>
+        <td class="pb-1 font-mono text-base align-top">
           {{- .FileHash.Base32 -}}
         </td>
       </tr>
-      <tr class="NARInfo-line">
-        <th scope="row" class="NARInfo-key">FileSize:</th>
-        <td class="NARInfo-value">
+      <tr>
+        <th scope="row" class="pe-3 py-1 font-bold text-left align-top leading-none">FileSize:</th>
+        <td class="pb-1 font-mono text-base align-top">
           {{ .FileSize }}
-          <span class="NARInfo-sizeSummary">({{ .FileSize | size }})</span>
+          <span class="font-sans">({{ .FileSize | size }})</span>
         </td>
       </tr>
-      <tr class="NARInfo-line">
-        <th scope="row" class="NARInfo-key">NarHash:</th>
-        <td class="NARInfo-value">
+      <tr>
+        <th scope="row" class="pe-3 py-1 font-bold text-left align-top leading-none">NarHash:</th>
+        <td class="pb-1 font-mono text-base align-top">
           {{- .NARHash.Base32 -}}
         </td>
       </tr>
-      <tr class="NARInfo-line">
-        <th scope="row" class="NARInfo-key">NarSize:</th>
-        <td class="NARInfo-value">
+      <tr>
+        <th scope="row" class="pe-3 py-1 font-bold text-left align-top leading-none">NarSize:</th>
+        <td class="pb-1 font-mono text-base align-top">
           {{ .NARSize }}
-          <span class="NARInfo-sizeSummary">({{ .NARSize | size }})</span>
+          <span class="font-sans">({{ .NARSize | size }})</span>
         </td>
       </tr>
       {{- with .References }}
-        <tr class="NARInfo-line">
-          <th scope="row" class="NARInfo-key">References:</th>
-          <td class="NARInfo-value">
+        <tr>
+          <th scope="row" class="pe-3 py-1 font-bold text-left align-top leading-none">References:</th>
+          <td class="pb-1 font-mono text-base align-top">
             {{- range . }}
-              <a href="/{{ .Digest }}.narinfo">{{ .Base }}</a>
+              <a href="/{{ .Digest }}.narinfo" class="nixcached-link">{{ .Base }}</a>
             {{- end }}
           </td>
         </tr>
       {{- end }}
       {{- with .Deriver }}
-        <tr class="NARInfo-line">
-          <th scope="row" class="NARInfo-key">Deriver:</th>
-          <td class="NARInfo-value">
+        <tr>
+          <th scope="row" class="pe-3 py-1 font-bold text-left align-top leading-none">Deriver:</th>
+          <td class="pb-1 font-mono text-base align-top">
             {{- .Base -}}
           </td>
         </tr>
       {{- end }}
       {{- range .Sig }}
-        <tr class="NARInfo-line">
-          <th scope="row" class="NARInfo-key">Sig:</th>
-          <td class="NARInfo-value">
+        <tr>
+          <th scope="row" class="pe-3 py-1 font-bold text-left align-top leading-none">Sig:</th>
+          <td class="pb-1 font-mono text-base align-top">
             {{- . -}}
           </td>
         </tr>
       {{- end }}
       {{- if not .CA.IsZero }}
-        <tr class="NARInfo-line">
-          <th scope="row" class="NARInfo-key">CA:</th>
-          <td class="NARInfo-value">
+        <tr>
+          <th scope="row" class="pe-3 py-1 font-bold text-left align-top leading-none">CA:</th>
+          <td class="pb-1 font-mono text-base align-top">
             {{- .CA -}}
           </td>
         </tr>

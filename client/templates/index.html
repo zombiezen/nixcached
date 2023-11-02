@@ -3,63 +3,81 @@
 {{- end }}
 
 {{ define "body" -}}
-  <h1>{{ .CacheInfo.StoreDirectory }}</h1>
-  <figure class="CacheInfo">
-    <pre class="CacheInfo-codeBlock"><code class="CacheInfo-code">
+  <h1 class="text-3xl font-bold">{{ .CacheInfo.StoreDirectory }}</h1>
+  <figure class="border border-black rounded-sm my-4 min-w-[30rem] max-w-fit dark:border-gray-600">
+    <pre class="mx-2 my-4"><code class="font-mono">
       {{- .CacheInfo.MarshalText | printf "%s" -}}
     </code></pre>
-    <figcaption class="CacheInfo-caption">from <a href="/nix-cache-info">nix-cache-info</a></figcaption>
+    <figcaption class="bg-black/10 w-auto px-2 py-1 text-right italic">
+      from <a href="/nix-cache-info" class="nixcached-link">nix-cache-info</a>
+    </figcaption>
   </figure>
 
-  <h2>Objects</h2>
+  <h2 class="text-2xl font-bold">Objects</h2>
   {{- if not .InitialCrawlComplete }}
-    <div class="DiscoveryWarning">
+    <div class="my-4 italic">
       Object list has not finished downloading.
       Refresh for more results.
     </div>
   {{- end }}
-  <form method="GET" action="/" class="ListingSearch">
-    <input name="q" type="search" class="ListingSearch-box" value="{{ .Query }}">
-    <input type="submit" class="ListingSearch-button" value="Search">
+  <form
+    method="GET"
+    action="/"
+    class="flex flex-row gap-x-2 my-5"
+  >
+    <input
+      name="q"
+      type="search"
+      class="min-w-[20rem] px-6 py-1 border border-gray-900 text-lg rounded-full dark:bg-gray-600"
+      value="{{ .Query }}"
+    >
+    <input
+      type="submit"
+      class="px-4 py-1 border border-gray-900 bg-gray-300 text-lg rounded-md dark:border-gray-600 dark:bg-transparent"
+      value="Search"
+    >
   </form>
   {{- with .Infos }}
     <table class="Listing">
       <thead>
-        <th scope="col" class="Listing-heading">Name</th>
-        <th scope="col" class="Listing-heading">Hash</th>
-        <th scope="col" colspan="2" class="Listing-heading Listing-heading--size">Size</th>
-        <th scope="col" colspan="2" class="Listing-heading Listing-heading--size">Compressed Size</th>
+        <th scope="col" class="pb-1 font-bold text-left">Name</th>
+        <th scope="col" class="pb-1 font-bold text-left">Hash</th>
+        <th scope="col" colspan="2" class="pb-1 font-bold text-center">Size</th>
+        <th scope="col" colspan="2" class="pb-1 font-bold text-center">Compressed Size</th>
       </thead>
       <tbody>
         {{- range . }}
           <tr>
-            <th scope="row" class="Listing-objectName">
+            <th scope="row" class="pe-4 py-1 font-normal text-left">
               {{- .StorePath.Name -}}
             </th>
-            <td class="Listing-objectHash">
-              <a href="{{ .StorePath.Digest }}.narinfo">{{ .StorePath.Digest }}</a>
+            <td class="px-0.5 py-1 font-mono font-normal text-left">
+              <a
+                href="{{ .StorePath.Digest }}.narinfo"
+                class="nixcached-link"
+              >{{ .StorePath.Digest }}</a>
             </td>
             {{- if eq .NARSize .ClosureNARSize }}
-              <td class="Listing-objectSize" colspan="2">
+              <td class="px-2 py-1 font-normal text-right" colspan="2">
                 {{- .NARSize | size }}
               </td>
             {{- else }}
-              <td class="Listing-objectSize">
+              <td class="px-2 py-1 font-normal text-right">
                 {{- .NARSize | size -}}
               </td>
-              <td class="Listing-objectSize">
+              <td class="px-2 py-1 font-normal text-right">
                 {{- .ClosureNARSize | size -}}
               </td>
             {{- end }}
             {{- if eq .FileSize .ClosureFileSize }}
-              <td class="Listing-objectSize" colspan="2">
+              <td class="px-2 py-1 font-normal text-right" colspan="2">
                 {{- .FileSize | size -}}
               </td>
             {{- else }}
-              <td class="Listing-objectSize">
+              <td class="px-2 py-1 font-normal text-right">
                 {{- .FileSize | size -}}
               </td>
-              <td class="Listing-objectSize">
+              <td class="px-2 py-1 font-normal text-right">
                 {{- .ClosureFileSize | size -}}
               </td>
             {{- end }}
@@ -69,8 +87,11 @@
     </table>
   {{- end }}
   {{- if .NextPage }}
-    <div class="NextPage">
-      <a href="/?q={{ .Query }}&after={{ .NextPage }}">Next Page &rarr;</a>
+    <div class="my-3 text-lg">
+      <a
+        href="/?q={{ .Query }}&after={{ .NextPage }}"
+        class="nixcached-link"
+      >Next Page &rarr;</a>
     </div>
   {{- end }}
 {{- end }}

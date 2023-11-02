@@ -94,10 +94,9 @@
         };
 
         devShells.default = pkgs.mkShell {
+          inputsFrom = [ self.packages.${system}.default.nixcached ];
+
           packages = [
-            self.packages.${system}.default.go
-            self.packages.${system}.default.redo
-            self.packages.${system}.default.sass
             self.packages.${system}.default.xz
 
             pkgs.go-tools # staticcheck
@@ -122,7 +121,7 @@
         git = pkgs.pkgsBuildBuild.git;
         go = pkgs.pkgsBuildHost.go_1_20;
         redo-apenwarr = pkgs.pkgsBuildBuild.redo-apenwarr;
-        sass = pkgs.pkgsBuildBuild.dart-sass;
+        tailwindcss = pkgs.pkgsBuildBuild.nodePackages.tailwindcss;
       };
 
       lib.mkDocker =

@@ -2,17 +2,23 @@
 <html lang="en-US">
   <head>
     <title>
-      {{- block "title" . }}{{ end -}}
+      {{- block "title" . -}}{{- end -}}
     </title>
     <link rel="stylesheet" href="/_/style.css" type="text/css">
   </head>
-	<body>
-    <main class="Main">
-      {{- block "body" . }}{{ end -}}
+	<body class="font-sans bg-white text-black dark:bg-gray-800 dark:text-white">
+    <main class="mx-4 mt-4">
+      {{- block "body" . -}}{{- end -}}
     </main>
-    <footer class="Footer">
-      <p class="Footer-copy">
-        Served by <a href="https://github.com/zombiezen/nixcached" rel="noreferrer noopener" target="_blank" class="Footer-link">nixcached</a>
+    <footer class="mt-12 mb-4">
+      <p class="text-sm text-center text-black/80 dark:text-white/80">
+        Served by
+        <a
+          href="https://github.com/zombiezen/nixcached"
+          rel="noreferrer noopener"
+          target="_blank"
+          class="nixcached-link text-black/80 visited:text-black/80 dark:text-white/80 dark:visited:text-white/80"
+        >nixcached</a>
       </p>
     </footer>
 	</body>
