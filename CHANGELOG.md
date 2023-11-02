@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning][].
   [systemd socket activation](https://0pointer.de/blog/projects/socket-activation.html).
 - `serve` can now handle `ssh://` URLs.
 
+### Changed
+
+- Sending `SIGHUP` to `upload` now acts as a graceful shutdown,
+  even when `--keep-alive` is in effect.
+
 ### Fixed
 
 - The dependencies in the `nixcached-upload.service` from the NixOS module

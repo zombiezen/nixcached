@@ -25,6 +25,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
 	"time"
 
@@ -33,6 +34,7 @@ import (
 	"gocloud.dev/blob"
 	"gocloud.dev/gcerrors"
 	"golang.org/x/exp/slices"
+	"golang.org/x/sys/unix"
 	"zombiezen.com/go/log"
 	"zombiezen.com/go/nix"
 	"zombiezen.com/go/nix/nar"
@@ -128,6 +130,8 @@ func runUpload(ctx context.Context, g *globalConfig, destinationBucketURL string
 		processUploads(processCtx, storeClient, bucket, opts, storePaths)
 	}()
 
+	readCtx, cancelRead := signal.NotifyContext(ctx, unix.SIGHUP)
+	defer cancelRead()
 	scanner := bufio.NewScanner(input)
 	c := make(chan bool)
 scanLoop:
@@ -135,7 +139,7 @@ scanLoop:
 		go func() {
 			select {
 			case c <- scanner.Scan():
-			case <-ctx.Done():
+			case <-readCtx.Done():
 			}
 		}()
 		select {
@@ -143,31 +147,32 @@ scanLoop:
 			if !scanned {
 				break scanLoop
 			}
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-readCtx.Done():
+			return readCtx.Err()
 		}
 
 		rawStorePath := scanner.Text()
-		log.Debugf(ctx, "Received %q as input", rawStorePath)
+		log.Debugf(readCtx, "Received %q as input", rawStorePath)
 		storePath, sub, err := storeDir.ParsePath(rawStorePath)
 		if err != nil {
-			log.Warnf(ctx, "Received invalid store path %q, skipping: %v", rawStorePath, err)
+			log.Warnf(readCtx, "Received invalid store path %q, skipping: %v", rawStorePath, err)
 			continue
 		}
 		if sub != "" {
-			log.Warnf(ctx, "Received path %q with subpath, skipping.", rawStorePath)
+			log.Warnf(readCtx, "Received path %q with subpath, skipping.", rawStorePath)
 			continue
 		}
 		if storePath.IsDerivation() {
-			log.Warnf(ctx, "Received store derivation path %q, skipping.", rawStorePath)
+			log.Warnf(readCtx, "Received store derivation path %q, skipping.", rawStorePath)
 			continue
 		}
 		select {
 		case storePaths <- storePath:
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-readCtx.Done():
+			return readCtx.Err()
 		}
 	}
+	cancelRead()
 	close(storePaths)
 	<-processDone
 	if err := scanner.Err(); err != nil {

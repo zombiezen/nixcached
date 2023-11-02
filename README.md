@@ -83,6 +83,10 @@ Then in your post-build hook run `nixcached send`:
 nixcached send -o /run/nixcached-upload $OUT_PATHS
 ```
 
+Sending `SIGHUP` to `nixcached upload`
+will prevent any new paths from being received
+and cause the process to exit after it finishes copying any Nix store objects.
+
 [post-build hook]: https://nixos.org/manual/nix/stable/advanced-topics/post-build-hook.html
 
 ## License
