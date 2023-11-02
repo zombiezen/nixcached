@@ -5,9 +5,14 @@ and this project adheres to [Semantic Versioning][].
 
 [Keep a Changelog]: https://keepachangelog.com/en/1.0.0/
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
-[Unreleased]: https://github.com/zombiezen/nixcached/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/zombiezen/nixcached/compare/v0.2.0...HEAD
 
-## [Unreleased][]
+## [0.2.0][]
+
+Version 0.2 includes many enhancements to the `serve` command,
+as well as some quality-of-life improvements to the `upload` command.
+
+[0.2.0]: https://github.com/zombiezen/nixcached/releases/tag/v0.2.0
 
 ### Added
 
