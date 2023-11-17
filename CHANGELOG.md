@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning][].
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
 [Unreleased]: https://github.com/zombiezen/nixcached/compare/v0.2.0...HEAD
 
-## [0.2.0][]
+## [Unreleased][]
+
+### Added
+
+- `send --finish` is a new option that signals for `upload` to exit
+  after receiving its arguments.
+  `upload` must be run with `--allow-finish` to support this.
+
+### Removed
+
+- `SIGHUP` is no longer specially handled by `upload`.
+
+## [0.2.0][] - 2023-11-02
 
 Version 0.2 includes many enhancements to the `serve` command,
 as well as some quality-of-life improvements to the `upload` command.

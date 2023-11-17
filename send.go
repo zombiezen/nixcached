@@ -32,16 +32,31 @@ func newSendCommand(g *globalConfig) *cobra.Command {
 		Short: "Queue store paths for upload",
 		Long: "This command appends its arguments to the output file,\n" +
 			"one per line.",
-		Args:                  cobra.MinimumNArgs(1),
 		SilenceErrors:         true,
 		SilenceUsage:          true,
 		DisableFlagsInUseLine: true,
 	}
 	outputPath := c.Flags().StringP("output", "o", "", "`path` to queue pipe (or file)")
 	timeout := c.Flags().Duration("timeout", 0, "maximum amount of time to send arguments")
+	finish := c.Flags().Bool("finish", false, "signal that the uploader should exit after sending the paths")
+	c.Args = func(cmd *cobra.Command, args []string) error {
+		if !*finish && len(args) < 1 {
+			return fmt.Errorf("requires at least 1 arg, only received %d", len(args))
+		}
+		for i, arg := range args {
+			if strings.Contains(arg, "\x00") {
+				return fmt.Errorf("arg %d contains a NUL byte", i+1)
+			}
+		}
+		return nil
+	}
 	c.RunE = func(cmd *cobra.Command, args []string) error {
 		if *outputPath == "" {
 			return fmt.Errorf("missing --output flag")
+		}
+		if *finish {
+			// Don't want to modify the underlying array passed into the function.
+			args = append(args[:len(args):len(args)], inlineEOFLine)
 		}
 		ctx := cmd.Context()
 		if *timeout > 0 {

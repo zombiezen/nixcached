@@ -84,9 +84,9 @@
           "nixcached-upload.socket"
         ];
 
+        serviceConfig.Type = "exec";
         serviceConfig.StandardInput = "socket";
         serviceConfig.KillMode = "mixed";
-        serviceConfig.KillSignal = "SIGHUP";
         environment.SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
 
         path = [ cfg.package ];
@@ -132,7 +132,9 @@
           "nixcached-serve.socket"
         ];
 
+        serviceConfig.Type = "exec";
         serviceConfig.Sockets = [ "nixcached-serve.socket" ];
+        serviceConfig.KillMode = "mixed";
 
         environment.SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
 

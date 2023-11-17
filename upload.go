@@ -25,7 +25,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"os/signal"
 	"strings"
 	"time"
 
@@ -34,7 +33,6 @@ import (
 	"gocloud.dev/blob"
 	"gocloud.dev/gcerrors"
 	"golang.org/x/exp/slices"
-	"golang.org/x/sys/unix"
 	"zombiezen.com/go/log"
 	"zombiezen.com/go/nix"
 	"zombiezen.com/go/nix/nar"
@@ -53,6 +51,7 @@ func newUploadCommand(g *globalConfig) *cobra.Command {
 	}
 	inputPath := c.Flags().String("input", "", "`path` to file with store paths (defaults to stdin)")
 	keepAlive := c.Flags().BoolP("keep-alive", "k", false, "if input is a pipe, then keep running even when there are no senders")
+	stopOnInlineEOF := c.Flags().Bool("allow-finish", false, "exit when encountering 'send --finish'")
 	opts := new(uploadOptions)
 	c.Flags().BoolVarP(&opts.overwrite, "force", "f", false, "replace already-uploaded store objects")
 	defaultCompression := nix.Bzip2
@@ -73,7 +72,7 @@ func newUploadCommand(g *globalConfig) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		input := os.Stdin
+		var input io.Reader = os.Stdin
 		if *inputPath != "" {
 			openFlag := os.O_RDONLY
 			if *keepAlive {
@@ -89,7 +88,7 @@ func newUploadCommand(g *globalConfig) *cobra.Command {
 			input = f
 		}
 
-		return runUpload(cmd.Context(), g, args[0], input, storeDir, opts)
+		return runUpload(cmd.Context(), g, args[0], input, *stopOnInlineEOF, storeDir, opts)
 	}
 	return c
 }
@@ -101,7 +100,7 @@ type uploadOptions struct {
 	concurrency    int
 }
 
-func runUpload(ctx context.Context, g *globalConfig, destinationBucketURL string, input io.Reader, storeDir nix.StoreDirectory, opts *uploadOptions) error {
+func runUpload(ctx context.Context, g *globalConfig, destinationBucketURL string, input io.Reader, stopOnInlineEOF bool, storeDir nix.StoreDirectory, opts *uploadOptions) error {
 	opener, err := newBucketURLOpener(ctx)
 	if err != nil {
 		return err
@@ -130,16 +129,18 @@ func runUpload(ctx context.Context, g *globalConfig, destinationBucketURL string
 		processUploads(processCtx, storeClient, bucket, opts, storePaths)
 	}()
 
-	readCtx, cancelRead := signal.NotifyContext(ctx, unix.SIGHUP)
-	defer cancelRead()
 	scanner := bufio.NewScanner(input)
-	c := make(chan bool)
+	if stopOnInlineEOF {
+		scanner.Split(scanLinesWithEOF)
+	}
+	c := make(chan bool, 1)
+
 scanLoop:
 	for {
 		go func() {
 			select {
 			case c <- scanner.Scan():
-			case <-readCtx.Done():
+			case <-ctx.Done():
 			}
 		}()
 		select {
@@ -147,32 +148,35 @@ scanLoop:
 			if !scanned {
 				break scanLoop
 			}
-		case <-readCtx.Done():
-			return readCtx.Err()
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 
 		rawStorePath := scanner.Text()
-		log.Debugf(readCtx, "Received %q as input", rawStorePath)
+		log.Debugf(ctx, "Received %q as input", rawStorePath)
+		if strings.TrimSpace(rawStorePath) == "" {
+			continue
+		}
 		storePath, sub, err := storeDir.ParsePath(rawStorePath)
 		if err != nil {
-			log.Warnf(readCtx, "Received invalid store path %q, skipping: %v", rawStorePath, err)
+			log.Warnf(ctx, "Received invalid store path %q, skipping: %v", rawStorePath, err)
 			continue
 		}
 		if sub != "" {
-			log.Warnf(readCtx, "Received path %q with subpath, skipping.", rawStorePath)
+			log.Warnf(ctx, "Received path %q with subpath, skipping.", rawStorePath)
 			continue
 		}
 		if storePath.IsDerivation() {
-			log.Warnf(readCtx, "Received store derivation path %q, skipping.", rawStorePath)
+			log.Warnf(ctx, "Received store derivation path %q, skipping.", rawStorePath)
 			continue
 		}
 		select {
 		case storePaths <- storePath:
-		case <-readCtx.Done():
-			return readCtx.Err()
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
-	cancelRead()
+
 	close(storePaths)
 	<-processDone
 	if err := scanner.Err(); err != nil {
@@ -596,6 +600,52 @@ func compressionMIMEType(underlying string, ct nix.CompressionType) string {
 		return "application/zstd"
 	default:
 		return "application/octet-stream"
+	}
+}
+
+// inlineEOFLine is an in-band EOF for the upload command.
+// It is sent by the send command during a --close.
+// It must be followed by a line feed
+// or a carriage return followed by a line feed.
+const inlineEOFLine = "\x00"
+
+func scanLinesWithEOF(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if m := matchInlineEOF(data); m > 0 {
+		return 0, nil, bufio.ErrFinalToken
+	} else if m < 0 && !atEOF {
+		return 0, nil, nil
+	}
+	advance, token, err = bufio.ScanLines(data, atEOF)
+	if m := matchInlineEOF(data[advance:]); m > 0 {
+		return advance, token, bufio.ErrFinalToken
+	} else if m < 0 && !atEOF {
+		return 0, nil, nil
+	}
+	return
+}
+
+func matchInlineEOF(data []byte) int {
+	n := min(len(data), len(inlineEOFLine))
+	if string(data[:n]) != inlineEOFLine {
+		return 0
+	}
+	if n == len(data) {
+		return -1
+	}
+	switch data[n] {
+	case '\n':
+		return n + 1
+	case '\r':
+		switch {
+		case n+1 >= len(data):
+			return -1
+		case data[n+1] == '\n':
+			return n + 2
+		default:
+			return 0
+		}
+	default:
+		return 0
 	}
 }
 

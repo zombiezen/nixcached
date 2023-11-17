@@ -17,14 +17,17 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"compress/bzip2"
 	"context"
 	"io"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"gocloud.dev/blob"
 	"gocloud.dev/blob/memblob"
 	"zombiezen.com/go/log/testlog"
@@ -214,6 +217,69 @@ func TestEnsureCacheInfo(t *testing.T) {
 			t.Errorf("%s = %q; want %q", nix.CacheInfoName, got, existingData)
 		}
 	})
+}
+
+func TestScanLinesWithEOF(t *testing.T) {
+	tests := []struct {
+		input string
+		want  []string
+	}{
+		{
+			input: "",
+			want:  []string{},
+		},
+		{
+			input: "\n",
+			want:  []string{""},
+		},
+		{
+			input: "\r\n",
+			want:  []string{""},
+		},
+		{
+			input: "\x00\n",
+			want:  []string{""},
+		},
+		{
+			input: "foo",
+			want:  []string{"foo"},
+		},
+		{
+			input: "foo\n",
+			want:  []string{"foo"},
+		},
+		{
+			input: "foo\r\n",
+			want:  []string{"foo"},
+		},
+		{
+			input: "foo\r\nbar",
+			want:  []string{"foo", "bar"},
+		},
+		{
+			input: "foo\r\nbar\n",
+			want:  []string{"foo", "bar"},
+		},
+		{
+			input: "foo\r\n\x00\r\n",
+			want:  []string{"foo"},
+		},
+		{
+			input: "foo\r\n\x00\r\nbar\n",
+			want:  []string{"foo"},
+		},
+	}
+	for _, test := range tests {
+		s := bufio.NewScanner(strings.NewReader(test.input))
+		s.Split(scanLinesWithEOF)
+		var got []string
+		for s.Scan() {
+			got = append(got, s.Text())
+		}
+		if err := s.Err(); err != nil || !cmp.Equal(test.want, got, cmpopts.EquateEmpty()) {
+			t.Errorf("scan %q = %q, %v; want %q, <nil>", test.input, got, err, test.want)
+		}
+	}
 }
 
 func regularFileNARData(data []byte) (narData []byte, contentOffset int64, err error) {
