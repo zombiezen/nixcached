@@ -87,6 +87,8 @@
         serviceConfig.Type = "exec";
         serviceConfig.StandardInput = "socket";
         serviceConfig.KillMode = "mixed";
+        serviceConfig.Restart = "on-failure";
+
         environment.SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
 
         path = [ cfg.package ];
@@ -135,6 +137,7 @@
         serviceConfig.Type = "exec";
         serviceConfig.Sockets = [ "nixcached-serve.socket" ];
         serviceConfig.KillMode = "mixed";
+        serviceConfig.Restart = "always";
 
         environment.SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
 

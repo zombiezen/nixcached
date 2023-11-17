@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning][].
 
 - `SIGHUP` is no longer specially handled by `upload`.
 
+### Fixed
+
+- The services in the NixOS modules now have `Restart=` set correctly.
+
 ## [0.2.0][] - 2023-11-02
 
 Version 0.2 includes many enhancements to the `serve` command,
