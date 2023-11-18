@@ -17,7 +17,7 @@ let
   pname = "nixcached";
   version = "0.2.0";
 
-  vendorHash = "sha256-i00VNRzTq8pJSItlkAIMpC8Zr18FzIMyN4lLUGr3bp0=";
+  vendorHash = "sha256-p7iZ9FrMXzI+Ik4coy+i61nqKRiZT44oDJ+E0DDdiFk=";
 
   passthru = {
     inherit go go-modules tailwindcss vendorHash xz;
