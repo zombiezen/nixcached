@@ -498,17 +498,25 @@ func (srv *storeServer) serveNAR(w http.ResponseWriter, r *http.Request) {
 
 	digest, compression, ok := parseNARURLPath(r.URL.Path)
 	if !ok {
+		log.Debugf(ctx, "Attempted to serve NAR for invalid path %q", r.URL.Path)
 		http.NotFound(w, r)
 		return
 	}
+	log.Debugf(ctx, "Serving NAR for %s (compression=%s)...", digest, compression)
 	info, err := store.NARInfo(ctx, digest)
-	if errors.Is(err, nixstore.ErrNotFound) || (err == nil && info.Compression != compression) {
+	if errors.Is(err, nixstore.ErrNotFound) {
+		log.Debugf(ctx, "Could not find NAR for %s: %v", digest, err)
 		http.NotFound(w, r)
 		return
 	}
 	if err != nil {
 		log.Errorf(ctx, "%v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if info.Compression != compression {
+		log.Debugf(ctx, "Could not serve NAR for %s: requested %s compression (underlying storage uses %s)", digest, compression, info.Compression)
+		http.NotFound(w, r)
 		return
 	}
 	downloadURL, err := url.Parse(info.URL)
@@ -526,6 +534,8 @@ func (srv *storeServer) serveNAR(w http.ResponseWriter, r *http.Request) {
 	}
 	err = store.Download(ctx, w, downloadURL)
 	if errors.Is(err, nixstore.ErrNotFound) {
+		log.Debugf(ctx, "Could not serve NAR for %s at %s (compression=%s): %v", digest, downloadURL, compression, err)
+
 		w.Header().Del("Content-Length")
 		w.Header().Del("Content-Type")
 		w.Header().Del("ETag")

@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning][].
 
 - Uploaded `.narinfo` files have the correct compression set
   when a non-bzip2 algorithm is used.
+- `serve` no longer 404s on NAR files at the top of a bucket.
 
 ## [0.3.0][] - 2023-11-21
 

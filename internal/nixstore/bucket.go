@@ -57,7 +57,7 @@ func OpenBucket(ctx context.Context, opener blob.BucketURLOpener, urlstr string)
 	if err != nil {
 		return nil, fmt.Errorf("open nix store from bucket: %v", err)
 	}
-	u.Path = slashpath.Clean(u.Path)
+	u.Path = slashpath.Clean("/" + u.Path)
 	if u.Path == "/" {
 		u.Path = ""
 	}
