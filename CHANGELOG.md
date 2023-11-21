@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning][].
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
 [Unreleased]: https://github.com/zombiezen/nixcached/compare/v0.3.0...HEAD
 
+## [Unreleased][]
+
+### Fixed
+
+- Uploaded `.narinfo` files have the correct compression set
+  when a non-bzip2 algorithm is used.
+
 ## [0.3.0][] - 2023-11-21
 
 Version 0.3 fixes the graceful shutdown mechanism for `upload`.

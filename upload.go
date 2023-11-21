@@ -478,7 +478,7 @@ func dump(ctx context.Context, w io.Writer, path nix.StorePath, ct nix.Compressi
 
 	info = &nix.NARInfo{
 		StorePath:   path,
-		Compression: nix.Bzip2,
+		Compression: ct,
 		NARHash:     uncompressedHashWriter.sum(),
 		NARSize:     uncompressedHashWriter.n,
 		FileHash:    compressedHashWriter.sum(),

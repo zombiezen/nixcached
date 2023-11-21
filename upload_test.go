@@ -20,6 +20,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/bzip2"
+	"compress/gzip"
 	"context"
 	"io"
 	"os"
@@ -93,6 +94,69 @@ func TestDump(t *testing.T) {
 				t.Error(err)
 			} else if diff := cmp.Diff(expectedNAR, uncompressed); diff != "" {
 				t.Errorf("NAR data (-want +got):\n%s", diff)
+			}
+		}
+
+		if gotListing != nil {
+			t.Errorf("ls = %#v; want <nil>", gotListing)
+		}
+
+		fileMD5Hasher := nix.NewHasher(nix.MD5)
+		fileMD5Hasher.Write(buf.Bytes())
+		if want := fileMD5Hasher.SumHash(); !gotMD5.Equal(want) {
+			t.Errorf("md5Hash = %v; want %v", gotMD5, want)
+		}
+	})
+
+	t.Run("Gzip", func(t *testing.T) {
+		ctx := testlog.WithTB(context.Background(), t)
+		storeDir := nix.StoreDirectory(t.TempDir())
+		storePath, err := storeDir.Object(objectName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(string(storePath), []byte(fileContent), 0o666); err != nil {
+			t.Fatal(err)
+		}
+
+		buf := new(bytes.Buffer)
+		gotInfo, gotListing, gotMD5, err := dump(ctx, buf, storePath, nix.Gzip, false)
+		if err != nil {
+			t.Error(err)
+		}
+
+		if gotInfo.StorePath != storePath {
+			t.Errorf("info.StorePath = %q; want %q", gotInfo.StorePath, storePath)
+		}
+		if !gotInfo.NARHash.Equal(expectedNARHash) {
+			t.Errorf("info.NARHash = %q; want %q", gotInfo.NARHash, expectedNARHash)
+		}
+		if want := int64(len(expectedNAR)); gotInfo.NARSize != want {
+			t.Errorf("info.NARSize = %d; want %d", gotInfo.NARSize, want)
+		}
+		fileSHA256Hasher := nix.NewHasher(nix.SHA256)
+		fileSHA256Hasher.Write(buf.Bytes())
+		if want := fileSHA256Hasher.SumHash(); !gotInfo.FileHash.Equal(want) {
+			t.Errorf("info.FileHash = %v; want %v", gotInfo.FileHash, want)
+		}
+		if want := int64(buf.Len()); gotInfo.FileSize != want {
+			t.Errorf("info.FileSize = %d; want %d", gotInfo.FileSize, want)
+		}
+
+		if gotInfo.Compression != nix.Gzip {
+			t.Errorf("info.Compression = %q; want %q", gotInfo.Compression, nix.Gzip)
+		} else {
+			zr, err := gzip.NewReader(bytes.NewReader(buf.Bytes()))
+			if err != nil {
+				t.Error(err)
+			} else {
+				uncompressed, err := io.ReadAll(zr)
+				if err != nil {
+					t.Error(err)
+				} else if diff := cmp.Diff(expectedNAR, uncompressed); diff != "" {
+					t.Errorf("NAR data (-want +got):\n%s", diff)
+				}
+				zr.Close()
 			}
 		}
 
