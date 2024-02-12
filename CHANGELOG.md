@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning][].
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
 [Unreleased]: https://github.com/zombiezen/nixcached/compare/v0.3.1...HEAD
 
+## [Unreleased][]
+
+### Fixed
+
+- Fixed `nix path-info` issues encountered when using Nix 2.19+
+  ([#18](https://github.com/zombiezen/nixcached/issues/18)).
+
 ## [0.3.1][] - 2023-11-21
 
 Version 0.3.1 fixes several show-stopping issues.

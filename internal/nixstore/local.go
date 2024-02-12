@@ -256,6 +256,16 @@ func (l *Local) newCommand(ctx context.Context, args []string) *exec.Cmd {
 }
 
 func pathInfoFromCLI(ctx context.Context, f nixCommandFactory, derivation bool, recursive bool, installables []string) ([]*nix.NARInfo, error) {
+	type pathInfo struct {
+		Deriver    nix.StorePath
+		NARHash    nix.Hash
+		NARSize    int64
+		Path       nix.StorePath
+		References []nix.StorePath
+		Signatures []*nix.Signature
+		CA         nix.ContentAddress
+	}
+
 	if len(installables) == 0 {
 		return nil, nil
 	}
@@ -278,36 +288,64 @@ func pathInfoFromCLI(ctx context.Context, f nixCommandFactory, derivation bool, 
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("query nix store paths %s: %v", strings.Join(installables, " "), err)
 	}
+	if out.Len() == 0 {
+		return nil, fmt.Errorf("query nix store paths %s: parse output: output empty", strings.Join(installables, " "))
+	}
 
-	var parsedOutput []struct {
-		Deriver    nix.StorePath
-		NARHash    nix.Hash
-		NARSize    int64
-		Path       nix.StorePath
-		References []nix.StorePath
-		Signatures []*nix.Signature
-		CA         nix.ContentAddress
-	}
-	if err := json.Unmarshal(out.Bytes(), &parsedOutput); err != nil {
-		return nil, fmt.Errorf("query nix store paths %s: parse output: %v", strings.Join(installables, " "), err)
-	}
-	result := make([]*nix.NARInfo, len(parsedOutput))
-	for i := range parsedOutput {
-		elem := &parsedOutput[i]
-		result[i] = &nix.NARInfo{
-			StorePath:   elem.Path,
-			NARHash:     elem.NARHash,
-			NARSize:     elem.NARSize,
-			Compression: nix.NoCompression,
-			FileHash:    elem.NARHash,
-			FileSize:    elem.NARSize,
-			Deriver:     elem.Deriver,
-			References:  elem.References,
-			Sig:         elem.Signatures,
-			CA:          elem.CA,
+	switch out.Bytes()[0] {
+	case '{':
+		var parsedOutput map[nix.StorePath]*pathInfo
+		if err := json.Unmarshal(out.Bytes(), &parsedOutput); err != nil {
+			return nil, fmt.Errorf("query nix store paths %s: parse output: %v", strings.Join(installables, " "), err)
 		}
+		result := make([]*nix.NARInfo, 0, len(parsedOutput))
+		for path, elem := range parsedOutput {
+			if elem == nil {
+				result = append(result, &nix.NARInfo{
+					StorePath:   path,
+					Compression: nix.NoCompression,
+				})
+			} else {
+				result = append(result, &nix.NARInfo{
+					StorePath:   path,
+					NARHash:     elem.NARHash,
+					NARSize:     elem.NARSize,
+					Compression: nix.NoCompression,
+					FileHash:    elem.NARHash,
+					FileSize:    elem.NARSize,
+					Deriver:     elem.Deriver,
+					References:  elem.References,
+					Sig:         elem.Signatures,
+					CA:          elem.CA,
+				})
+			}
+		}
+		return result, nil
+	case '[':
+		var parsedOutput []pathInfo
+		if err := json.Unmarshal(out.Bytes(), &parsedOutput); err != nil {
+			return nil, fmt.Errorf("query nix store paths %s: parse output: %v", strings.Join(installables, " "), err)
+		}
+		result := make([]*nix.NARInfo, len(parsedOutput))
+		for i := range parsedOutput {
+			elem := &parsedOutput[i]
+			result[i] = &nix.NARInfo{
+				StorePath:   elem.Path,
+				NARHash:     elem.NARHash,
+				NARSize:     elem.NARSize,
+				Compression: nix.NoCompression,
+				FileHash:    elem.NARHash,
+				FileSize:    elem.NARSize,
+				Deriver:     elem.Deriver,
+				References:  elem.References,
+				Sig:         elem.Signatures,
+				CA:          elem.CA,
+			}
+		}
+		return result, nil
+	default:
+		return nil, fmt.Errorf("query nix store paths %s: parse output: unknown format", strings.Join(installables, " "))
 	}
-	return result, nil
 }
 
 type errorIterator struct {
