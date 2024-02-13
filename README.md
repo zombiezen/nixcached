@@ -29,7 +29,7 @@ nix-env --file . --install
 Or if you're using Nix Flakes:
 
 ```shell
-nix profile install github:zombiezen/nixcached/v0.3.1
+nix profile install github:zombiezen/nixcached/v0.3.2
 ```
 
 Otherwise, you can download a static binary from the [latest release][].
