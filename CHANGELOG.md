@@ -5,9 +5,13 @@ and this project adheres to [Semantic Versioning][].
 
 [Keep a Changelog]: https://keepachangelog.com/en/1.0.0/
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
-[Unreleased]: https://github.com/zombiezen/nixcached/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/zombiezen/nixcached/compare/v0.3.2...HEAD
 
-## [Unreleased][]
+## [0.3.2][] - 2024-02-13
+
+Version 0.3.2 fixes an interoperability issue with newer versions of Nix.
+
+[0.3.2]: https://github.com/zombiezen/nixcached/releases/tag/v0.3.2
 
 ### Fixed
 

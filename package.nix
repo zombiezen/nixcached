@@ -15,7 +15,7 @@
 
 let
   pname = "nixcached";
-  version = "0.3.1";
+  version = "0.3.2";
 
   vendorHash = "sha256-p7iZ9FrMXzI+Ik4coy+i61nqKRiZT44oDJ+E0DDdiFk=";
 
