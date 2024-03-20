@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning][].
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
 [Unreleased]: https://github.com/zombiezen/nixcached/compare/v0.3.2...HEAD
 
+## [Unreleased][]
+
+### Fixed
+
+- Fixed edge case where certain NARs weren't serialized correctly
+  preventing `nixcached upload` from uploading them.
+  (Such cases were automatically caught by the hashing checks,
+  so no data corruption would occur.)
+
 ## [0.3.2][] - 2024-02-13
 
 Version 0.3.2 fixes an interoperability issue with newer versions of Nix.

@@ -13,7 +13,7 @@ require (
 	golang.org/x/sys v0.14.0
 	zombiezen.com/go/bass v0.0.0-20230225022050-74028357c0a4
 	zombiezen.com/go/log v1.1.0
-	zombiezen.com/go/nix v0.0.0-20230721153539-73514ae10b02
+	zombiezen.com/go/nix v0.0.0-20240320004700-0734e137f7fe
 	zombiezen.com/go/sqlite v0.13.0
 )
 
