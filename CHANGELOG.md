@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning][].
   preventing `nixcached upload` from uploading them.
   (Such cases were automatically caught by the hashing checks,
   so no data corruption would occur.)
+- `/tmp` is now marked as a volume in the Docker images
+  ([#19](https://github.com/zombiezen/nixcached/issues/19)).
 
 ## [0.3.2][] - 2024-02-13
 

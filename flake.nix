@@ -152,6 +152,8 @@
                 "org.opencontainers.image.licenses" = "Apache-2.0";
                 "org.opencontainers.image.version" = nixcached.version;
               };
+
+              Volumes."/tmp" = {};
             };
 
           }).overrideAttrs (previous: { passthru = previous.passthru // { inherit nixcached; }; });
